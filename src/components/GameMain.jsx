@@ -15,7 +15,6 @@ import {
 import { Link } from 'react-router-dom';
 import { db } from '../firebase';
 import {
-  addDoc,
   arrayUnion,
   collection,
   doc,
@@ -24,8 +23,10 @@ import {
   limit,
   onSnapshot,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
+  updateDoc,
   where,
 } from 'firebase/firestore';
 
@@ -250,6 +251,11 @@ const getRoomElapsedSeconds = (room, nowMs = Date.now()) => {
   return Math.max(0, Math.floor(elapsedOffsetSeconds + elapsedMs / 1000));
 };
 
+const isRoomTimeExpired = (room) => {
+  const limitSeconds = getRoomTimeLimitSeconds(room);
+  return limitSeconds > 0 && getRoomElapsedSeconds(room) >= limitSeconds;
+};
+
 function FoodVideoPlayer({ videoUrl }) {
   const cleanVideoUrl = String(videoUrl || '').trim();
   const youtubeEmbedUrl = getYouTubeEmbedUrl(cleanVideoUrl);
@@ -325,6 +331,7 @@ export default function GameMain() {
   const waitingVoiceTimerRef = useRef(null);
 
   const isProcessingScan = useRef(false);
+  const finishRequestedRef = useRef(false);
   const lastScanRef = useRef({ code: '', time: 0 });
   const foodCacheRef = useRef(new Map());
   const scannedBarcodeSetRef = useRef(new Set());
@@ -392,10 +399,14 @@ export default function GameMain() {
 
         if (data.status === 'playing') {
           if (step === 'waiting') setStep('playing');
+          finishRequestedRef.current = false;
           setIsPaused(false);
         } else if (data.status === 'paused') {
           setIsPaused(true);
         } else if (data.status === 'finished') {
+          finishRequestedRef.current = true;
+          setShowVideoModal(null);
+          setIsPaused(false);
           setStep('summary');
         }
       } else {
@@ -421,8 +432,7 @@ export default function GameMain() {
       setTimeRemaining(limitSeconds ? Math.max(0, limitSeconds - cappedElapsed) : 0);
 
       if (step === 'playing' && limitSeconds > 0 && elapsedSeconds >= limitSeconds) {
-        setShowVideoModal(null);
-        setStep('summary');
+        finishGameForPlayer('time_expired');
       }
     };
 
@@ -515,7 +525,13 @@ export default function GameMain() {
   }, [step]);
 
   useEffect(() => {
-    if (step === 'playing' && !isPaused && !showVideoModal && codeReader.current) {
+    if (
+      step === 'playing' &&
+      !isPaused &&
+      !showVideoModal &&
+      timeRemaining > 0 &&
+      codeReader.current
+    ) {
       startScanner();
     } else {
       codeReader.current?.reset();
@@ -526,7 +542,7 @@ export default function GameMain() {
       codeReader.current?.reset();
       stopCamera();
     };
-  }, [step, isPaused, showVideoModal, facingMode]);
+  }, [step, isPaused, showVideoModal, facingMode, timeRemaining]);
 
   function stopCamera() {
     if (streamRef.current) {
@@ -711,43 +727,85 @@ export default function GameMain() {
     earnedBonus,
   }) {
     const playerRef = doc(db, 'rooms', currentRoomCode, 'players', playerDocId);
+    const scanRef = doc(db, 'rooms', currentRoomCode, 'scans', `${playerDocId}_${food.barcode}`);
 
-    await setDoc(
-      playerRef,
-      {
-        name: playerName,
-        avatar: playerInfo.avatar?.icon || '',
-        score: Number(finalScoreToSave.toFixed(3)),
-        scoreSum: Number(newTotalScore.toFixed(3)),
-        averageScore: Number((newTotalScore / newItemsCount).toFixed(3)),
-        speedBonus: Number(earnedBonus.toFixed(3)),
-        itemsScanned: newItemsCount,
-        scannedBarcodes: arrayUnion(food.barcode),
-        lastBarcode: food.barcode,
-        lastFoodName: food.name,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    );
+    await runTransaction(db, async (transaction) => {
+      const scanSnap = await transaction.get(scanRef);
+      const playerSnap = await transaction.get(playerRef);
+      const savedBarcodes = playerSnap.exists()
+        ? playerSnap.data().scannedBarcodes || []
+        : [];
+      const normalizedSavedBarcodes = savedBarcodes.map(normalizeBarcode);
 
-    await addDoc(collection(db, 'rooms', currentRoomCode, 'scans'), {
-      playerId: playerDocId,
-      playerName,
-      barcode: food.barcode,
-      uniqueScanKey: `${playerDocId}_${food.barcode}`,
-      foodId: food.id,
-      foodName: food.name,
-      category: food.category,
-      sugar: food.sugar,
-      fat: food.fat,
-      salt: food.salt,
-      sugarStars: details.sugarStars,
-      fatStars: details.fatStars,
-      saltStars: details.saltStars,
-      avgStars: Number(details.avgStars.toFixed(3)),
-      statusLabel: details.status.label,
-      createdAt: serverTimestamp(),
+      if (scanSnap.exists() || normalizedSavedBarcodes.includes(food.barcode)) {
+        throw new Error('DUPLICATE_BARCODE');
+      }
+
+      transaction.set(
+        playerRef,
+        {
+          name: playerName,
+          avatar: playerInfo.avatar?.icon || '',
+          score: Number(finalScoreToSave.toFixed(3)),
+          scoreSum: Number(newTotalScore.toFixed(3)),
+          averageScore: Number((newTotalScore / newItemsCount).toFixed(3)),
+          speedBonus: Number(earnedBonus.toFixed(3)),
+          itemsScanned: newItemsCount,
+          scannedBarcodes: arrayUnion(food.barcode),
+          lastBarcode: food.barcode,
+          lastFoodName: food.name,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+
+      transaction.set(scanRef, {
+        playerId: playerDocId,
+        playerName,
+        barcode: food.barcode,
+        uniqueScanKey: `${playerDocId}_${food.barcode}`,
+        foodId: food.id,
+        foodName: food.name,
+        category: food.category,
+        sugar: food.sugar,
+        fat: food.fat,
+        salt: food.salt,
+        sugarStars: details.sugarStars,
+        fatStars: details.fatStars,
+        saltStars: details.saltStars,
+        avgStars: Number(details.avgStars.toFixed(3)),
+        statusLabel: details.status.label,
+        createdAt: serverTimestamp(),
+      });
     });
+  }
+
+  async function finishGameForPlayer(reason = 'time_expired') {
+    if (finishRequestedRef.current) return;
+
+    finishRequestedRef.current = true;
+    setShowVideoModal(null);
+    setIsPaused(false);
+    setScanStatus({ type: 'success', msg: 'หมดเวลาแล้ว ระบบกำลังสรุปผลภารกิจ' });
+    codeReader.current?.reset();
+    stopCamera();
+    setStep('summary');
+
+    const currentRoomCode = latestState.current.roomCode;
+    const currentRoomData = latestState.current.roomData;
+
+    if (!currentRoomCode || currentRoomData?.status === 'finished') return;
+
+    try {
+      await updateDoc(doc(db, 'rooms', currentRoomCode), {
+        status: 'finished',
+        finishedAt: serverTimestamp(),
+        finishedReason: reason,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.warn('Unable to mark room as finished from player screen:', err);
+    }
   }
 
   async function processBarcode(rawCode) {
@@ -788,6 +846,12 @@ export default function GameMain() {
       const firebaseScannedBarcodes = playerSnap.exists()
         ? playerSnap.data().scannedBarcodes || []
         : [];
+
+      if (curRoomData?.status === 'finished' || isRoomTimeExpired(curRoomData)) {
+        await finishGameForPlayer('time_expired');
+        isProcessingScan.current = false;
+        return;
+      }
 
       if (curScannedItems >= itemLimit) {
         setScanStatus({ type: 'success', msg: 'สแกนครบตามภารกิจแล้ว รอครูปิดเกมได้เลย' });
@@ -831,7 +895,8 @@ export default function GameMain() {
         return;
       }
 
-      const details = calcItemDetails(foundItem);
+      const scannedFood = { ...foundItem, barcode: cleanCode };
+      const details = calcItemDetails(scannedFood);
       const newTotalScore = curScoreSum + details.avgStars;
       const newItemsCount = curScannedItems + 1;
       const currentAvg = newTotalScore / newItemsCount;
@@ -850,32 +915,46 @@ export default function GameMain() {
         finalScoreToSave = currentAvg + earnedBonus;
       }
 
-      setScoreSum(newTotalScore);
-      setScore(finalScoreToSave);
-      setScannedItems(newItemsCount);
-      setScannedBarcodes((prev) => {
-        const nextSet = new Set(prev.map(normalizeBarcode));
-        nextSet.add(foundItem.barcode);
-        scannedBarcodeSetRef.current = nextSet;
-        return Array.from(nextSet);
-      });
-      setSpeedBonus(earnedBonus);
-      setScanStatus({ type: 'success', msg: `✅ สแกนสำเร็จ! เจอ ${foundItem.name}` });
-      setShowVideoModal({ ...foundItem, details });
-
       await saveScanToFirebase({
         roomCode: curRoomCode,
         playerDocId,
         playerName,
-        food: foundItem,
+        food: scannedFood,
         details,
         newTotalScore,
         newItemsCount,
         finalScoreToSave,
         earnedBonus,
       });
+
+      setScoreSum(newTotalScore);
+      setScore(finalScoreToSave);
+      setScannedItems(newItemsCount);
+      setScannedBarcodes((prev) => {
+        const nextSet = new Set(prev.map(normalizeBarcode));
+        nextSet.add(scannedFood.barcode);
+        scannedBarcodeSetRef.current = nextSet;
+        return Array.from(nextSet);
+      });
+      setSpeedBonus(earnedBonus);
+      setScanStatus({ type: 'success', msg: `✅ สแกนสำเร็จ! เจอ ${scannedFood.name}` });
+      setShowVideoModal({ ...scannedFood, details });
     } catch (err) {
       console.error('processBarcode error:', err);
+      if (err?.message === 'DUPLICATE_BARCODE') {
+        setScanStatus({
+          type: 'error',
+          msg: `⚠️ รหัส ${cleanCode} ถูกสแกนแล้วในรอบนี้ กรุณาเลือกอาหาร/ขนมชิ้นอื่น`,
+        });
+
+        window.setTimeout(() => {
+          setScanStatus({ type: '', msg: '' });
+          setBarcodeInput('');
+          isProcessingScan.current = false;
+        }, 2400);
+        return;
+      }
+
       setScanStatus({
         type: 'error',
         msg: 'เกิดข้อผิดพลาดระหว่างอ่านฐานข้อมูลหรือบันทึกคะแนน',
@@ -916,6 +995,7 @@ export default function GameMain() {
 
     const nextPlayerId = safeDocId(playerInfo.name);
     setPlayerId(nextPlayerId);
+    finishRequestedRef.current = false;
 
     await setDoc(doc(db, 'rooms', roomCode, 'players', nextPlayerId), {
       name: playerInfo.name.trim(),
