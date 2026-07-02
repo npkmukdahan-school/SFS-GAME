@@ -43,15 +43,18 @@ const getRoomTimeLimitSeconds = (room, fallbackMinutes = 3) => {
 };
 
 const getRoomElapsedSeconds = (room, nowMs = Date.now()) => {
+  const pausedElapsedSeconds = Number(room?.pausedElapsedSeconds);
+  if (room?.status === 'paused' && pausedElapsedSeconds >= 0) {
+    return Math.floor(pausedElapsedSeconds);
+  }
+
   const startMs = toMillis(room?.startedAt || room?.startTime || room?.gameStartedAt);
-  if (!startMs) return 0;
+  const elapsedOffsetSeconds = Number(room?.elapsedOffsetSeconds || 0);
+  if (!startMs) return Math.max(0, Math.floor(elapsedOffsetSeconds));
 
-  const totalPausedMs = Number(room?.totalPausedMs || room?.pausedDurationMs || 0);
-  const pausedAtMs = room?.status === 'paused' ? toMillis(room?.pausedAt) : 0;
-  const currentPauseMs = pausedAtMs ? Math.max(0, nowMs - pausedAtMs) : 0;
-  const elapsedMs = Math.max(0, nowMs - startMs - totalPausedMs - currentPauseMs);
+  const elapsedMs = Math.max(0, nowMs - startMs);
 
-  return Math.floor(elapsedMs / 1000);
+  return Math.max(0, Math.floor(elapsedOffsetSeconds + elapsedMs / 1000));
 };
 
 export default function RoomCreator() {
@@ -67,6 +70,30 @@ export default function RoomCreator() {
   const celebrationMusic = useRef(new Audio(CELEBRATION_MUSIC_URL));
   const teacherVoiceTimer = useRef(null);
   const finishRequested = useRef(false);
+
+  const stopAllMusic = () => {
+    [waitingMusic.current, adventureMusic.current, celebrationMusic.current].forEach((audio) => {
+      audio.pause();
+    });
+  };
+
+  const playAudio = async (audio) => {
+    try {
+      await audio.play();
+    } catch {
+      console.log("Audio block");
+    }
+  };
+
+  const playWaitingMusic = () => {
+    waitingMusic.current.loop = true;
+    waitingMusic.current.volume = 0.32;
+    adventureMusic.current.pause();
+    adventureMusic.current.currentTime = 0;
+    celebrationMusic.current.pause();
+    celebrationMusic.current.currentTime = 0;
+    playAudio(waitingMusic.current);
+  };
 
   // --- Real-time Firebase Listener ---
   useEffect(() => {
@@ -105,17 +132,13 @@ export default function RoomCreator() {
     celebrationMusic.current.volume = 0.45;
 
     if (roomState === 'waiting') {
-      adventureMusic.current.pause();
-      adventureMusic.current.currentTime = 0;
-      celebrationMusic.current.pause();
-      celebrationMusic.current.currentTime = 0;
-      waitingMusic.current.play().catch(() => console.log("Audio block"));
+      playWaitingMusic();
     } else if (roomState === 'playing') {
       waitingMusic.current.pause();
       waitingMusic.current.currentTime = 0;
       celebrationMusic.current.pause();
       celebrationMusic.current.currentTime = 0;
-      adventureMusic.current.play().catch(e => console.log("Audio block"));
+      playAudio(adventureMusic.current);
     } else if (roomState === 'paused') {
       waitingMusic.current.pause();
       adventureMusic.current.pause();
@@ -124,12 +147,10 @@ export default function RoomCreator() {
       waitingMusic.current.pause();
       adventureMusic.current.pause();
       adventureMusic.current.currentTime = 0;
-      celebrationMusic.current.play().catch(e => console.log("Audio block"));
+      playAudio(celebrationMusic.current);
       triggerConfetti();
     } else {
-      waitingMusic.current.pause();
-      adventureMusic.current.pause();
-      celebrationMusic.current.pause();
+      stopAllMusic();
     }
   }, [roomState]);
 
@@ -215,10 +236,14 @@ export default function RoomCreator() {
       startedAt: null,
       pausedAt: null,
       totalPausedMs: 0,
+      elapsedOffsetSeconds: 0,
+      pausedElapsedSeconds: 0,
       finishedAt: null,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+
+    playWaitingMusic();
   };
 
   const handleStartGame = async () => {
@@ -235,6 +260,8 @@ export default function RoomCreator() {
       startedAt: serverTimestamp(),
       pausedAt: null,
       totalPausedMs: 0,
+      elapsedOffsetSeconds: 0,
+      pausedElapsedSeconds: 0,
       timeLimit: Number(settings.timeLimit || roomData?.timeLimit || 3),
       timeLimitSeconds,
       updatedAt: serverTimestamp(),
@@ -242,11 +269,13 @@ export default function RoomCreator() {
   };
 
   const handlePauseGame = async () => {
+    const elapsedSeconds = getRoomElapsedSeconds(roomData);
     setRoomState('paused');
     adventureMusic.current.pause();
     await updateDoc(doc(db, "rooms", roomCode), {
       status: 'paused',
       pausedAt: serverTimestamp(),
+      pausedElapsedSeconds: elapsedSeconds,
       updatedAt: serverTimestamp(),
     });
   };
@@ -257,19 +286,19 @@ export default function RoomCreator() {
     await runTransaction(db, async (transaction) => {
       const roomSnap = await transaction.get(roomRef);
       const room = roomSnap.data() || {};
-      const pausedAtMs = toMillis(room.pausedAt);
-      const extraPausedMs = pausedAtMs ? Math.max(0, Date.now() - pausedAtMs) : 0;
+      const pausedElapsedSeconds = Number(room.pausedElapsedSeconds || 0);
 
       transaction.update(roomRef, {
         status: 'playing',
+        startedAt: serverTimestamp(),
         pausedAt: null,
-        totalPausedMs: Number(room.totalPausedMs || 0) + extraPausedMs,
+        elapsedOffsetSeconds: pausedElapsedSeconds,
         updatedAt: serverTimestamp(),
       });
     });
 
     setRoomState('playing');
-    adventureMusic.current.play().catch(() => {});
+    playAudio(adventureMusic.current);
   };
 
   const handleFinishGame = async () => {
@@ -279,6 +308,7 @@ export default function RoomCreator() {
     await updateDoc(doc(db, "rooms", roomCode), {
       status: 'finished',
       finishedAt: serverTimestamp(),
+      finishedElapsedSeconds: getRoomElapsedSeconds(roomData),
       updatedAt: serverTimestamp(),
     });
   };
@@ -292,6 +322,7 @@ export default function RoomCreator() {
     setRoomData(null);
     setTimeLeft(0);
     setPlayers([]);
+    stopAllMusic();
   };
 
   const triggerConfetti = () => {

@@ -16,6 +16,7 @@ import { Link } from 'react-router-dom';
 import { db } from '../firebase';
 import {
   addDoc,
+  arrayUnion,
   collection,
   doc,
   getDoc,
@@ -235,15 +236,18 @@ const getRoomTimeLimitSeconds = (room) => {
 };
 
 const getRoomElapsedSeconds = (room, nowMs = Date.now()) => {
+  const pausedElapsedSeconds = Number(room?.pausedElapsedSeconds);
+  if (room?.status === 'paused' && pausedElapsedSeconds >= 0) {
+    return Math.floor(pausedElapsedSeconds);
+  }
+
   const startMs = getRoomStartMs(room);
-  if (!startMs) return 0;
+  const elapsedOffsetSeconds = Number(room?.elapsedOffsetSeconds || 0);
+  if (!startMs) return Math.max(0, Math.floor(elapsedOffsetSeconds));
 
-  const totalPausedMs = Number(room?.totalPausedMs || room?.pausedDurationMs || 0);
-  const pausedAtMs = room?.status === 'paused' ? toMillis(room?.pausedAt) : 0;
-  const currentPauseMs = pausedAtMs ? Math.max(0, nowMs - pausedAtMs) : 0;
-  const elapsedMs = Math.max(0, nowMs - startMs - totalPausedMs - currentPauseMs);
+  const elapsedMs = Math.max(0, nowMs - startMs);
 
-  return Math.floor(elapsedMs / 1000);
+  return Math.max(0, Math.floor(elapsedOffsetSeconds + elapsedMs / 1000));
 };
 
 function FoodVideoPlayer({ videoUrl }) {
@@ -299,6 +303,7 @@ export default function GameMain() {
   const [score, setScore] = useState(0);
   const [speedBonus, setSpeedBonus] = useState(0);
   const [scannedItems, setScannedItems] = useState(0);
+  const [scannedBarcodes, setScannedBarcodes] = useState([]);
 
   const [barcodeInput, setBarcodeInput] = useState('');
   const [scanStatus, setScanStatus] = useState({ type: '', msg: '' });
@@ -322,6 +327,7 @@ export default function GameMain() {
   const isProcessingScan = useRef(false);
   const lastScanRef = useRef({ code: '', time: 0 });
   const foodCacheRef = useRef(new Map());
+  const scannedBarcodeSetRef = useRef(new Set());
 
   const [cameraError, setCameraError] = useState('');
   const [facingMode, setFacingMode] = useState('environment');
@@ -339,9 +345,11 @@ export default function GameMain() {
     roomCode,
     playerName: playerInfo.name,
     playerId,
+    scannedBarcodes,
   });
 
   useEffect(() => {
+    scannedBarcodeSetRef.current = new Set(scannedBarcodes.map(normalizeBarcode));
     latestState.current = {
       scoreSum,
       scannedItems,
@@ -350,8 +358,9 @@ export default function GameMain() {
       roomCode,
       playerName: playerInfo.name,
       playerId,
+      scannedBarcodes,
     };
-  }, [scoreSum, scannedItems, timeUsed, roomData, roomCode, playerInfo.name, playerId]);
+  }, [scoreSum, scannedItems, timeUsed, roomData, roomCode, playerInfo.name, playerId, scannedBarcodes]);
 
   useEffect(() => {
     const hints = new Map();
@@ -713,6 +722,7 @@ export default function GameMain() {
         averageScore: Number((newTotalScore / newItemsCount).toFixed(3)),
         speedBonus: Number(earnedBonus.toFixed(3)),
         itemsScanned: newItemsCount,
+        scannedBarcodes: arrayUnion(food.barcode),
         lastBarcode: food.barcode,
         lastFoodName: food.name,
         updatedAt: serverTimestamp(),
@@ -724,6 +734,7 @@ export default function GameMain() {
       playerId: playerDocId,
       playerName,
       barcode: food.barcode,
+      uniqueScanKey: `${playerDocId}_${food.barcode}`,
       foodId: food.id,
       foodName: food.name,
       category: food.category,
@@ -766,14 +777,42 @@ export default function GameMain() {
       roomCode: curRoomCode,
       playerName,
       playerId: curPlayerId,
+      scannedBarcodes: curScannedBarcodes,
     } = latestState.current;
 
     try {
       const itemLimit = Number(curRoomData?.itemLimit || curRoomData?.foodLimit || 5);
+      const playerDocId = curPlayerId || safeDocId(playerName);
+      const playerRef = doc(db, 'rooms', curRoomCode, 'players', playerDocId);
+      const playerSnap = await getDoc(playerRef);
+      const firebaseScannedBarcodes = playerSnap.exists()
+        ? playerSnap.data().scannedBarcodes || []
+        : [];
 
       if (curScannedItems >= itemLimit) {
         setScanStatus({ type: 'success', msg: 'สแกนครบตามภารกิจแล้ว รอครูปิดเกมได้เลย' });
         isProcessingScan.current = false;
+        return;
+      }
+
+      const alreadyScanned = scannedBarcodeSetRef.current.has(cleanCode) ||
+        (curScannedBarcodes || []).map(normalizeBarcode).includes(cleanCode) ||
+        firebaseScannedBarcodes.map(normalizeBarcode).includes(cleanCode);
+
+      if (alreadyScanned) {
+        setScannedBarcodes((prev) =>
+          Array.from(new Set([...prev, ...firebaseScannedBarcodes].map(normalizeBarcode))),
+        );
+        setScanStatus({
+          type: 'error',
+          msg: `⚠️ รหัส ${cleanCode} ถูกสแกนแล้วในรอบนี้ กรุณาเลือกอาหาร/ขนมชิ้นอื่น`,
+        });
+
+        window.setTimeout(() => {
+          setScanStatus({ type: '', msg: '' });
+          setBarcodeInput('');
+          isProcessingScan.current = false;
+        }, 2400);
         return;
       }
 
@@ -814,11 +853,16 @@ export default function GameMain() {
       setScoreSum(newTotalScore);
       setScore(finalScoreToSave);
       setScannedItems(newItemsCount);
+      setScannedBarcodes((prev) => {
+        const nextSet = new Set(prev.map(normalizeBarcode));
+        nextSet.add(foundItem.barcode);
+        scannedBarcodeSetRef.current = nextSet;
+        return Array.from(nextSet);
+      });
       setSpeedBonus(earnedBonus);
       setScanStatus({ type: 'success', msg: `✅ สแกนสำเร็จ! เจอ ${foundItem.name}` });
       setShowVideoModal({ ...foundItem, details });
 
-      const playerDocId = curPlayerId || safeDocId(playerName);
       await saveScanToFirebase({
         roomCode: curRoomCode,
         playerDocId,
@@ -880,10 +924,17 @@ export default function GameMain() {
       scoreSum: 0,
       speedBonus: 0,
       itemsScanned: 0,
+      scannedBarcodes: [],
       joinedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
 
+    setScoreSum(0);
+    setScore(0);
+    setSpeedBonus(0);
+    setScannedItems(0);
+    setScannedBarcodes([]);
+    scannedBarcodeSetRef.current = new Set();
     setStep('waiting');
   };
 
