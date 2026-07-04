@@ -2,9 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Pause, RotateCcw, Users, Clock, Trophy, Settings, ShieldAlert } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { Link } from 'react-router-dom';
-import { auth, db } from '../firebase'; // นำเข้า auth/db จาก firebase.js
-import { onAuthStateChanged } from 'firebase/auth';
+import { db } from '../firebase'; // นำเข้า db จาก firebase.js
 import {
   collection,
   deleteDoc,
@@ -69,8 +67,6 @@ export default function RoomCreator() {
   const [timeLeft, setTimeLeft] = useState(0);
   const [players, setPlayers] = useState([]);
   const [roomData, setRoomData] = useState(null);
-  const [currentAdmin, setCurrentAdmin] = useState(null);
-  const [authReady, setAuthReady] = useState(false);
 
   const waitingMusic = useRef(new Audio(WAITING_MUSIC_URL));
   const adventureMusic = useRef(new Audio(ACTION_MUSIC_URL));
@@ -101,15 +97,6 @@ export default function RoomCreator() {
     celebrationMusic.current.currentTime = 0;
     playAudio(waitingMusic.current);
   };
-
-  useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      setCurrentAdmin(user);
-      setAuthReady(true);
-    });
-
-    return () => unsubscribeAuth();
-  }, []);
 
   // --- Real-time Firebase Listener ---
   useEffect(() => {
@@ -241,11 +228,6 @@ export default function RoomCreator() {
 
   // --- Firebase Actions ---
   const handleCreateRoom = async () => {
-    if (!currentAdmin) {
-      alert('กรุณาเข้าสู่ระบบ Admin ก่อนสร้างห้องเกม');
-      return;
-    }
-
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const timeLimitSeconds = Number(settings.timeLimit || 3) * 60;
 
@@ -258,10 +240,6 @@ export default function RoomCreator() {
     // สร้างห้องใน Firestore
     await setDoc(doc(db, "rooms", code), {
       status: 'waiting',
-      adminId: currentAdmin.uid,
-      adminEmail: currentAdmin.email || '',
-      adminName: currentAdmin.displayName || currentAdmin.email || 'Admin',
-      foodCollectionPath: `admins/${currentAdmin.uid}/foods`,
       timeLimit: Number(settings.timeLimit || 3),
       timeLimitSeconds,
       itemLimit: Number(settings.itemLimit || 5),
@@ -374,36 +352,6 @@ export default function RoomCreator() {
     const s = (seconds % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
   };
-
-  if (!authReady) {
-    return (
-      <div className="min-h-screen bg-[#0a192f] text-white flex items-center justify-center p-6">
-        <div className="bg-[#112240]/80 border border-cyan-500/30 rounded-3xl p-8 font-black text-cyan-300">
-          กำลังตรวจสอบสิทธิ์ Admin...
-        </div>
-      </div>
-    );
-  }
-
-  if (!currentAdmin) {
-    return (
-      <div className="min-h-screen bg-[#0a192f] text-white flex items-center justify-center p-6">
-        <div className="max-w-lg w-full bg-[#112240]/90 border border-cyan-500/30 rounded-[2rem] p-8 text-center shadow-[0_0_40px_rgba(6,182,212,0.2)]">
-          <ShieldAlert className="w-16 h-16 text-cyan-400 mx-auto mb-4" />
-          <h1 className="text-3xl font-black mb-3">Admin Required</h1>
-          <p className="text-slate-300 font-bold mb-6">
-            กรุณาสมัครสมาชิกหรือเข้าสู่ระบบ Admin ก่อนสร้างห้อง เพื่อแยกฐานข้อมูลอาหารของแต่ละ Admin
-          </p>
-          <Link
-            to="/admin"
-            className="inline-flex items-center justify-center bg-cyan-500 text-slate-950 font-black px-8 py-4 rounded-2xl"
-          >
-            ไปหน้า Admin
-          </Link>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-[#0a192f] text-slate-200 font-sans relative overflow-hidden flex flex-col">

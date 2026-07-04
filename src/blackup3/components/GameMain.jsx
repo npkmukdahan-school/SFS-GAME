@@ -684,51 +684,16 @@ export default function GameMain() {
     const cleanCode = normalizeBarcode(code);
     if (!cleanCode) return null;
 
-    const currentRoomData = latestState.current.roomData || {};
-    const adminId = currentRoomData.adminId || '';
-    const cacheKey = `${adminId || 'global'}:${cleanCode}`;
-
-    if (foodCacheRef.current.has(cacheKey)) {
-      return foodCacheRef.current.get(cacheKey);
+    if (foodCacheRef.current.has(cleanCode)) {
+      return foodCacheRef.current.get(cleanCode);
     }
 
-    if (adminId) {
-      const adminFoodDirectRef = doc(db, 'admins', adminId, 'foods', cleanCode);
-      const adminFoodDirectSnap = await getDoc(adminFoodDirectRef);
-
-      if (adminFoodDirectSnap.exists()) {
-        const food = normalizeFoodDoc(
-          { id: adminFoodDirectSnap.id, ...adminFoodDirectSnap.data() },
-          cleanCode,
-        );
-        food.ownerAdminId = adminId;
-        foodCacheRef.current.set(cacheKey, food);
-        return food;
-      }
-
-      const adminFoodQuery = query(
-        collection(db, 'admins', adminId, 'foods'),
-        where('barcode', '==', cleanCode),
-        limit(1),
-      );
-      const adminFoodQuerySnap = await getDocs(adminFoodQuery);
-
-      if (!adminFoodQuerySnap.empty) {
-        const foodDoc = adminFoodQuerySnap.docs[0];
-        const food = normalizeFoodDoc({ id: foodDoc.id, ...foodDoc.data() }, cleanCode);
-        food.ownerAdminId = adminId;
-        foodCacheRef.current.set(cacheKey, food);
-        return food;
-      }
-    }
-
-    // fallback สำหรับห้องเก่าที่ยังไม่มี adminId
     const directRef = doc(db, 'foods', cleanCode);
     const directSnap = await getDoc(directRef);
 
     if (directSnap.exists()) {
       const food = normalizeFoodDoc({ id: directSnap.id, ...directSnap.data() }, cleanCode);
-      foodCacheRef.current.set(cacheKey, food);
+      foodCacheRef.current.set(cleanCode, food);
       return food;
     }
 
@@ -742,11 +707,11 @@ export default function GameMain() {
     if (!querySnap.empty) {
       const foodDoc = querySnap.docs[0];
       const food = normalizeFoodDoc({ id: foodDoc.id, ...foodDoc.data() }, cleanCode);
-      foodCacheRef.current.set(cacheKey, food);
+      foodCacheRef.current.set(cleanCode, food);
       return food;
     }
 
-    foodCacheRef.current.set(cacheKey, null);
+    foodCacheRef.current.set(cleanCode, null);
     return null;
   }
 
@@ -802,7 +767,6 @@ export default function GameMain() {
         foodId: food.id,
         foodName: food.name,
         category: food.category,
-        ownerAdminId: food.ownerAdminId || '',
         sugar: food.sugar,
         fat: food.fat,
         salt: food.salt,
