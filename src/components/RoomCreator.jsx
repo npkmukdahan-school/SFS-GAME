@@ -19,7 +19,8 @@ import {
 const FDA_JUNIOR_LOGO_URL = 'https://i.postimg.cc/VL8jfMz0/FKVHoyve-Sk-Sp-SWu-Aq-D5xth-KQ.png';
 // วางไฟล์เพลงไว้ที่ public/audio/waiting-music.mp3
 // เวลาเว็บรัน Vite จะเรียกใช้ได้ด้วย path /audio/waiting-music.mp3
-const WAITING_MUSIC_URL = '/audio/waiting-music.mp3';
+const PUBLIC_BASE_URL = import.meta.env.BASE_URL || '/';
+const WAITING_MUSIC_URL = `${PUBLIC_BASE_URL}audio/waiting-music.mp3`;
 const ACTION_MUSIC_URL = 'https://cdn.pixabay.com/download/audio/2022/10/18/audio_31c2730e64.mp3?filename=action-dramatic-sport-rock-trailer-122763.mp3';
 const CELEBRATION_MUSIC_URL = 'https://cdn.pixabay.com/download/audio/2021/08/09/audio_c8c8a73467.mp3?filename=success-fanfare-trumpets-6185.mp3';
 const ENABLE_TEACHER_WAITING_VOICE = false;

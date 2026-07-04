@@ -27,7 +27,8 @@ import {
 } from 'lucide-react';
 import { auth, db } from '../firebase';
 
-const GAME_LOGO_URL = 'public/sfs-game-logo.png';
+const PUBLIC_BASE_URL = import.meta.env.BASE_URL || '/';
+const GAME_LOGO_URL = `${PUBLIC_BASE_URL}sfs-game-logo.png`;
 
 const emptyFoodForm = {
   barcode: '',

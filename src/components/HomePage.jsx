@@ -14,7 +14,8 @@ import {
   Users,
 } from 'lucide-react';
 
-const GAME_LOGO_URL = 'public/sfs-game-logo.png';
+const PUBLIC_BASE_URL = import.meta.env.BASE_URL || '/';
+const GAME_LOGO_URL = `${PUBLIC_BASE_URL}sfs-game-logo.png`;
 const KNOWLEDGE_PDF_URL = 'https://phan.moph.go.th/kanya/download/page02/16.pdf';
 
 const learningSteps = [
