@@ -1,6 +1,6 @@
 // src/components/RoomCreator.jsx
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, RotateCcw, Users, Clock, Trophy, Settings, ShieldAlert } from 'lucide-react';
+import { ArrowLeft, Play, Pause, RotateCcw, Users, Clock, Trophy, Settings, ShieldAlert } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Link } from 'react-router-dom';
 import { auth, db } from '../firebase'; // นำเข้า auth/db จาก firebase.js
@@ -9,6 +9,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   onSnapshot,
   runTransaction,
   serverTimestamp,
@@ -71,6 +72,7 @@ export default function RoomCreator() {
   const [players, setPlayers] = useState([]);
   const [roomData, setRoomData] = useState(null);
   const [currentAdmin, setCurrentAdmin] = useState(null);
+  const [currentAdminProfile, setCurrentAdminProfile] = useState(null);
   const [authReady, setAuthReady] = useState(false);
 
   const waitingMusic = useRef(new Audio(WAITING_MUSIC_URL));
@@ -104,8 +106,19 @@ export default function RoomCreator() {
   };
 
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       setCurrentAdmin(user);
+      setCurrentAdminProfile(null);
+
+      if (user) {
+        try {
+          const adminSnap = await getDoc(doc(db, 'admins', user.uid));
+          setCurrentAdminProfile(adminSnap.exists() ? adminSnap.data() : null);
+        } catch {
+          setCurrentAdminProfile(null);
+        }
+      }
+
       setAuthReady(true);
     });
 
@@ -262,6 +275,7 @@ export default function RoomCreator() {
       adminId: currentAdmin.uid,
       adminEmail: currentAdmin.email || '',
       adminName: currentAdmin.displayName || currentAdmin.email || 'Admin',
+      schoolName: currentAdminProfile?.schoolName || '',
       foodCollectionPath: `admins/${currentAdmin.uid}/foods`,
       timeLimit: Number(settings.timeLimit || 3),
       timeLimitSeconds,
@@ -439,7 +453,18 @@ export default function RoomCreator() {
         
         {roomState === 'setup' && (
           <div className="bg-[#112240]/80 backdrop-blur-xl border border-blue-500/30 p-10 rounded-[2.5rem] shadow-[0_0_50px_rgba(37,99,235,0.2)] max-w-xl w-full animate-in zoom-in-95 duration-300">
+            <Link
+              to="/admin"
+              className="mb-6 inline-flex items-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-3 text-sm font-black text-cyan-100 hover:bg-cyan-300/20"
+            >
+              <ArrowLeft size={18} /> กลับหน้า Admin
+            </Link>
             <h2 className="text-3xl font-black text-white mb-8 text-center flex items-center justify-center gap-3"><Settings className="text-blue-500"/> ตั้งค่าภารกิจ</h2>
+            {currentAdminProfile?.schoolName && (
+              <div className="mb-6 rounded-2xl border border-lime-300/30 bg-lime-300/10 px-5 py-4 text-center font-black text-lime-200">
+                โรงเรียน/วิทยาลัย: {currentAdminProfile.schoolName}
+              </div>
+            )}
             <div className="space-y-8">
               <div>
                 <label className="block text-sm font-bold text-cyan-400 uppercase tracking-widest mb-3"><Clock className="inline w-4 h-4 mr-1"/> เวลาในการเล่น (นาที)</label>

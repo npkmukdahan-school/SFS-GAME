@@ -18,8 +18,10 @@ import {
 } from 'firebase/firestore';
 import {
   Database,
+  Download,
   LogOut,
   Plus,
+  QrCode,
   Save,
   ShieldCheck,
   Trash2,
@@ -43,12 +45,20 @@ const emptyFoodForm = {
 
 const normalizeBarcode = (value) => String(value || '').replace(/[^\dA-Za-z]/g, '').trim();
 
+const getQrCodeUrl = (barcode, size = 180) => {
+  const cleanBarcode = normalizeBarcode(barcode);
+  if (!cleanBarcode) return '';
+
+  return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&margin=12&data=${encodeURIComponent(cleanBarcode)}`;
+};
+
 export default function AdminPortal() {
   const [authReady, setAuthReady] = useState(false);
   const [admin, setAdmin] = useState(null);
   const [mode, setMode] = useState('login');
   const [authForm, setAuthForm] = useState({
     displayName: '',
+    schoolName: '',
     email: '',
     password: '',
   });
@@ -126,6 +136,11 @@ export default function AdminPortal() {
 
     try {
       if (mode === 'register') {
+        if (!authForm.schoolName.trim()) {
+          setAuthError('กรุณากรอกชื่อโรงเรียน');
+          return;
+        }
+
         const credential = await createUserWithEmailAndPassword(
           auth,
           authForm.email.trim(),
@@ -142,6 +157,7 @@ export default function AdminPortal() {
           uid: credential.user.uid,
           email: credential.user.email || authForm.email.trim(),
           displayName: authForm.displayName.trim() || credential.user.email || 'Admin',
+          schoolName: authForm.schoolName.trim(),
           role: 'admin',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -176,6 +192,7 @@ export default function AdminPortal() {
     try {
       const foodData = {
         barcode,
+        qrCodeValue: barcode,
         name: foodForm.name.trim(),
         category: foodForm.category,
         sugar: Number(foodForm.sugar || 0),
@@ -277,12 +294,21 @@ export default function AdminPortal() {
             </div>
 
             {mode === 'register' && (
-              <input
-                value={authForm.displayName}
-                onChange={(e) => setAuthForm({ ...authForm, displayName: e.target.value })}
-                placeholder="ชื่อ Admin / ชื่อครู"
-                className="w-full mb-3 px-4 py-4 rounded-2xl bg-slate-950/70 border border-white/10 outline-none focus:border-cyan-300"
-              />
+              <>
+                <input
+                  value={authForm.displayName}
+                  onChange={(e) => setAuthForm({ ...authForm, displayName: e.target.value })}
+                  placeholder="ชื่อ Admin / ชื่อครู"
+                  className="w-full mb-3 px-4 py-4 rounded-2xl bg-slate-950/70 border border-white/10 outline-none focus:border-cyan-300"
+                />
+                <input
+                  required
+                  value={authForm.schoolName}
+                  onChange={(e) => setAuthForm({ ...authForm, schoolName: e.target.value })}
+                  placeholder="ชื่อโรงเรียน / วิทยาลัย"
+                  className="w-full mb-3 px-4 py-4 rounded-2xl bg-slate-950/70 border border-white/10 outline-none focus:border-cyan-300"
+                />
+              </>
             )}
 
             <input
@@ -376,6 +402,31 @@ export default function AdminPortal() {
               </div>
               <input value={foodForm.videoUrl} onChange={(e) => setFoodForm({ ...foodForm, videoUrl: e.target.value })} placeholder="ลิงก์วิดีโอ YouTube / Google Drive / MP4" className="w-full px-4 py-3 rounded-xl bg-slate-950/70 border border-white/10 outline-none focus:border-cyan-300" />
               <input value={foodForm.imageUrl} onChange={(e) => setFoodForm({ ...foodForm, imageUrl: e.target.value })} placeholder="ลิงก์รูปสินค้า (ถ้ามี)" className="w-full px-4 py-3 rounded-xl bg-slate-950/70 border border-white/10 outline-none focus:border-cyan-300" />
+              {normalizeBarcode(foodForm.barcode) && (
+                <div className="rounded-2xl border border-cyan-300/20 bg-slate-950/40 p-4 flex items-center gap-4">
+                  <img
+                    src={getQrCodeUrl(foodForm.barcode, 140)}
+                    alt={`QR Code ${normalizeBarcode(foodForm.barcode)}`}
+                    className="w-24 h-24 rounded-xl bg-white p-2"
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-cyan-200 font-black">
+                      <QrCode size={18} /> QR Code สำหรับสแกนในเกม
+                    </div>
+                    <p className="text-sm text-slate-300 mt-1">
+                      QR นี้เก็บค่าเลขบาร์โค้ด: <span className="font-mono text-white">{normalizeBarcode(foodForm.barcode)}</span>
+                    </p>
+                    <a
+                      href={getQrCodeUrl(foodForm.barcode, 500)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-2 mt-3 text-sm font-black text-lime-200 hover:text-lime-100"
+                    >
+                      <Download size={16} /> เปิด/ดาวน์โหลด QR
+                    </a>
+                  </div>
+                </div>
+              )}
               {foodError && (
                 <div className="rounded-2xl border border-rose-400/30 bg-rose-500/15 p-3 text-sm font-bold text-rose-100">
                   {foodError}
@@ -406,6 +457,7 @@ export default function AdminPortal() {
               <thead className="text-xs uppercase tracking-widest text-cyan-300 bg-slate-950/40">
                 <tr>
                   <th className="p-4">บาร์โค้ด</th>
+                  <th className="p-4">QR</th>
                   <th className="p-4">รายการ</th>
                   <th className="p-4">หมวด</th>
                   <th className="p-4 text-right">น้ำตาล</th>
@@ -418,6 +470,21 @@ export default function AdminPortal() {
                 {foods.map((food) => (
                   <tr key={food.id} className="border-t border-white/10">
                     <td className="p-4 font-mono text-cyan-100">{food.barcode || food.id}</td>
+                    <td className="p-4">
+                      <a
+                        href={getQrCodeUrl(food.barcode || food.id, 500)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-2 rounded-xl bg-white p-2 text-slate-950"
+                        title="เปิด QR Code"
+                      >
+                        <img
+                          src={getQrCodeUrl(food.barcode || food.id, 92)}
+                          alt={`QR Code ${food.barcode || food.id}`}
+                          className="h-12 w-12"
+                        />
+                      </a>
+                    </td>
                     <td className="p-4 font-black">{food.name}</td>
                     <td className="p-4 text-slate-300">{food.category}</td>
                     <td className="p-4 text-right">{food.sugar || 0}g</td>
@@ -433,7 +500,7 @@ export default function AdminPortal() {
                 ))}
                 {foods.length === 0 && (
                   <tr>
-                    <td colSpan="7" className="p-10 text-center text-slate-400 font-bold">
+                    <td colSpan="8" className="p-10 text-center text-slate-400 font-bold">
                       ยังไม่มีข้อมูลอาหารในฐานของ Admin คนนี้
                     </td>
                   </tr>

@@ -106,6 +106,33 @@ const calcItemDetails = (food) => {
 
 const normalizeBarcode = (code) => String(code || '').replace(/[^\dA-Za-z]/g, '').trim();
 
+const extractBarcodeFromQrText = (text) => {
+  const rawText = String(text || '').trim();
+  if (!rawText) return '';
+
+  try {
+    const parsedUrl = new URL(rawText);
+    const barcodeFromUrl =
+      parsedUrl.searchParams.get('barcode') ||
+      parsedUrl.searchParams.get('code') ||
+      parsedUrl.searchParams.get('data');
+
+    if (barcodeFromUrl) return normalizeBarcode(barcodeFromUrl);
+  } catch {
+    // QR ส่วนใหญ่จะเก็บเลขบาร์โค้ดตรง ๆ จึงไม่จำเป็นต้องเป็น URL
+  }
+
+  try {
+    const parsedJson = JSON.parse(rawText);
+    const barcodeFromJson = parsedJson.barcode || parsedJson.code || parsedJson.id;
+    if (barcodeFromJson) return normalizeBarcode(barcodeFromJson);
+  } catch {
+    // ไม่ใช่ JSON ให้ใช้ข้อความดิบต่อ
+  }
+
+  return normalizeBarcode(rawText);
+};
+
 const safeDocId = (value) =>
   String(value || 'player')
     .trim()
@@ -256,6 +283,9 @@ const isRoomTimeExpired = (room) => {
   return limitSeconds > 0 && getRoomElapsedSeconds(room) >= limitSeconds;
 };
 
+const getRoomSchoolName = (room) =>
+  String(room?.schoolName || room?.adminSchoolName || room?.school || '').trim();
+
 function FoodVideoPlayer({ videoUrl }) {
   const cleanVideoUrl = String(videoUrl || '').trim();
   const youtubeEmbedUrl = getYouTubeEmbedUrl(cleanVideoUrl);
@@ -314,7 +344,7 @@ export default function GameMain() {
   const [barcodeInput, setBarcodeInput] = useState('');
   const [scanStatus, setScanStatus] = useState({ type: '', msg: '' });
   const [showVideoModal, setShowVideoModal] = useState(null);
-  const [scanHint, setScanHint] = useState('จัดบาร์โค้ดให้อยู่ในกรอบแนวนอน...');
+  const [scanHint, setScanHint] = useState('จัด QR Code ให้อยู่กลางกรอบ...');
 
   const championMusic = useRef(
     new Audio('https://cdn.pixabay.com/download/audio/2021/08/09/audio_c8c8a73467.mp3?filename=success-fanfare-trumpets-6185.mp3'),
@@ -372,12 +402,7 @@ export default function GameMain() {
   useEffect(() => {
     const hints = new Map();
     hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-      BarcodeFormat.EAN_13,
-      BarcodeFormat.EAN_8,
-      BarcodeFormat.UPC_A,
-      BarcodeFormat.UPC_E,
-      BarcodeFormat.CODE_128,
-      BarcodeFormat.CODE_39,
+      BarcodeFormat.QR_CODE,
     ]);
     hints.set(DecodeHintType.TRY_HARDER, true);
 
@@ -478,11 +503,11 @@ export default function GameMain() {
     let hintTimer;
     if (step === 'playing' && !isPaused && !showVideoModal && !cameraError) {
       const hints = [
-        'เล็งบาร์โค้ดให้เต็มกรอบแนวนอน',
+        'เล็ง QR Code ให้อยู่กลางกรอบ',
         'ถ้าอ่านไม่ติด ให้ซูมเข้าเล็กน้อย',
-        'ระวังแสงสะท้อนบนซองขนม',
+        'ระวังแสงสะท้อนบนกระดาษหรือหน้าจอ',
         'ถือกล้องให้นิ่งประมาณ 1 วินาที',
-        'บาร์โค้ดเอียงเล็กน้อยอ่านได้ แต่ไม่ควรเบลอ',
+        'QR Code เอียงเล็กน้อยอ่านได้ แต่ไม่ควรเบลอ',
       ];
 
       let hintIndex = 0;
@@ -845,7 +870,7 @@ export default function GameMain() {
   }
 
   async function processBarcode(rawCode) {
-    const cleanCode = normalizeBarcode(rawCode);
+    const cleanCode = extractBarcodeFromQrText(rawCode);
     if (!cleanCode || isProcessingScan.current) return;
 
     const now = Date.now();
@@ -1206,6 +1231,11 @@ export default function GameMain() {
               <h1 className="text-4xl font-black text-cyan-400 uppercase tracking-widest drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]">
                 สร้างตัวตนสายลับ
               </h1>
+              {getRoomSchoolName(roomData) && (
+                <p className="mt-3 inline-flex rounded-full border border-lime-300/30 bg-lime-300/10 px-5 py-2 text-sm font-black text-lime-200">
+                  กำลังเล่นกับ {getRoomSchoolName(roomData)}
+                </p>
+              )}
             </div>
 
             <form
@@ -1262,6 +1292,11 @@ export default function GameMain() {
             <h2 className="text-2xl font-black text-white mb-2">
               ยินดีต้อนรับ, <span className="text-cyan-400">{playerInfo.name}</span>
             </h2>
+            {getRoomSchoolName(roomData) && (
+              <div className="mb-4 inline-flex rounded-full border border-lime-300/30 bg-lime-300/10 px-5 py-2 text-sm font-black text-lime-200">
+                เล่นกับ {getRoomSchoolName(roomData)}
+              </div>
+            )}
 
             <div className="bg-[#0a192f] rounded-2xl p-6 text-left border border-blue-800/50 my-8 space-y-4">
               <h3 className="text-lg font-black text-cyan-400 flex items-center gap-2">
@@ -1295,6 +1330,11 @@ export default function GameMain() {
                 <div>
                   <div className="text-xs text-cyan-500 font-black">AGENT</div>
                   <div className="font-bold text-white">{playerInfo.name}</div>
+                  {getRoomSchoolName(roomData) && (
+                    <div className="mt-1 text-[11px] font-black text-lime-300">
+                      {getRoomSchoolName(roomData)}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1329,10 +1369,10 @@ export default function GameMain() {
 
                 {!cameraError && (
                   <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center">
-                    <div className="w-[78%] max-w-[360px] aspect-[2.6/1] border-[5px] border-cyan-400/90 rounded-2xl relative shadow-[0_0_0_9999px_rgba(0,0,0,0.52)]">
+                    <div className="w-[72%] max-w-[320px] aspect-square border-[5px] border-cyan-400/90 rounded-2xl relative shadow-[0_0_0_9999px_rgba(0,0,0,0.52)]">
                       <div className="absolute top-1/2 left-0 w-full h-[3px] bg-red-500 shadow-[0_0_18px_#ef4444] animate-[scan_2s_ease-in-out_infinite]"></div>
                       <div className="absolute -top-8 left-0 right-0 text-center text-xs font-black text-cyan-200">
-                        วางบาร์โค้ดให้อยู่ในกรอบนี้
+                        วาง QR Code ให้อยู่ในกรอบนี้
                       </div>
                     </div>
                   </div>
@@ -1403,7 +1443,7 @@ export default function GameMain() {
                 className="w-full bg-[#112240] p-4 rounded-2xl border border-cyan-900/50 relative z-10"
               >
                 <label className="block text-xs font-black text-cyan-400 mb-2 text-center">
-                  สแกนไม่ติด? กรอกรหัสบาร์โค้ดเองได้เลย
+                  สแกน QR ไม่ติด? กรอกเลขบาร์โค้ดเองได้เลย
                 </label>
 
                 <div className="flex gap-2">
@@ -1433,6 +1473,11 @@ export default function GameMain() {
           <div className="w-full max-w-lg text-center animate-in zoom-in duration-500">
             <Trophy className="w-24 h-24 text-amber-400 mx-auto mb-6 drop-shadow-[0_0_20px_rgba(245,158,11,0.6)]" />
             <h1 className="text-5xl font-black text-amber-400 uppercase tracking-widest mb-2">จบภารกิจ</h1>
+            {getRoomSchoolName(roomData) && (
+              <div className="mt-3 inline-flex rounded-full border border-lime-300/30 bg-lime-300/10 px-5 py-2 text-sm font-black text-lime-200">
+                ผลภารกิจของ {getRoomSchoolName(roomData)}
+              </div>
+            )}
 
             <div className="bg-[#112240]/90 border-2 border-cyan-500/50 rounded-3xl p-8 my-8 shadow-[0_0_30px_rgba(6,182,212,0.2)]">
               <div className="text-sm font-black text-cyan-400 uppercase tracking-widest mb-2">
