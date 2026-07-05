@@ -5,12 +5,13 @@ import { getFirestore } from "firebase/firestore";
 
 // แทนที่ข้อมูลด้านล่างนี้ด้วย Config ของคุณเองจาก Firebase Console
 const firebaseConfig = {
-  apiKey: "AIzaSyYourApiKeyHere...",
-  authDomain: "sfs-game-app.firebaseapp.com",
-  projectId: "sfs-game-app",
-  storageBucket: "sfs-game-app.appspot.com",
-  messagingSenderId: "1234567890",
-  appId: "1:1234567890:web:abcdef123456"
+  apiKey: "AIzaSyDdjG3lKL7T_tAd8FOupQhOI7KePTz_6sk",
+  authDomain: "sfs-game.firebaseapp.com",
+  projectId: "sfs-game",
+  storageBucket: "sfs-game.firebasestorage.app",
+  messagingSenderId: "644916864534",
+  appId: "1:644916864534:web:b1f4d35ab058f5b93c7737",
+  measurementId: "G-69BF3T9C6W"
 };
 
 // Initialize Firebase
