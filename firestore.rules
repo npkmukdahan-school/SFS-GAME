@@ -1,0 +1,66 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function adminOwner(adminId) {
+      return signedIn() && request.auth.uid == adminId;
+    }
+
+    function roomExists(roomCode) {
+      return exists(/databases/$(database)/documents/rooms/$(roomCode));
+    }
+
+    function roomAdmin(roomCode) {
+      return get(/databases/$(database)/documents/rooms/$(roomCode)).data.adminId;
+    }
+
+    match /admins/{adminId} {
+      allow read: if true;
+      allow create, update, delete: if adminOwner(adminId);
+
+      match /foods/{barcode} {
+        allow read: if true;
+        allow create, update, delete: if adminOwner(adminId);
+      }
+    }
+
+    // สำหรับข้อมูลอาหารชุดเก่าที่ยังอยู่ collection foods เดิม
+    match /foods/{barcode} {
+      allow read: if true;
+      allow create: if signedIn()
+        && !exists(/databases/$(database)/documents/foods/$(barcode))
+        && request.resource.data.ownerAdminId == request.auth.uid;
+      allow update, delete: if signedIn()
+        && resource.data.ownerAdminId == request.auth.uid;
+    }
+
+    match /rooms/{roomCode} {
+      allow read: if true;
+      allow create: if signedIn()
+        && request.resource.data.adminId == request.auth.uid;
+      allow update, delete: if signedIn()
+        && resource.data.adminId == request.auth.uid;
+
+      // อนุญาตให้ client ผู้เล่นปิดห้องเป็น finished ได้เมื่อหมดเวลา
+      allow update: if request.resource.data.diff(resource.data).changedKeys()
+        .hasOnly(['status', 'finishedAt', 'finishedElapsedSeconds', 'finishedReason', 'updatedAt'])
+        && request.resource.data.status == 'finished';
+
+      match /players/{playerId} {
+        allow read: if true;
+        allow create, update: if roomExists(roomCode);
+        allow delete: if signedIn() && roomAdmin(roomCode) == request.auth.uid;
+      }
+
+      match /scans/{scanId} {
+        allow read: if true;
+        allow create: if roomExists(roomCode);
+        allow update, delete: if false;
+      }
+    }
+  }
+}

@@ -1,22 +1,33 @@
 // src/firebase.js
-import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { initializeApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import { getDatabase } from 'firebase/database';
+import { getFirestore } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 
-// แทนที่ข้อมูลด้านล่างนี้ด้วย Config ของคุณเองจาก Firebase Console
 const firebaseConfig = {
-  apiKey: "AIzaSyDdjG3lKL7T_tAd8FOupQhOI7KePTz_6sk",
-  authDomain: "sfs-game.firebaseapp.com",
-  projectId: "sfs-game",
-  storageBucket: "sfs-game.firebasestorage.app",
-  messagingSenderId: "644916864534",
-  appId: "1:644916864534:web:b1f4d35ab058f5b93c7737",
-  measurementId: "G-69BF3T9C6W"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
+const missingEnvKeys = Object.entries(firebaseConfig)
+  .filter(([, value]) => !value)
+  .map(([key]) => key);
 
-// Export บริการที่จะนำไปใช้
+if (missingEnvKeys.length > 0) {
+  console.warn(
+    `Firebase config is missing: ${missingEnvKeys.join(', ')}. Check your .env.local file.`,
+  );
+}
+
+export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+export const realtimeDb = getDatabase(app);
+export const storage = getStorage(app);
+
