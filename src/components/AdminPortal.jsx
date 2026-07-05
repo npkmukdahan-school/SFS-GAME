@@ -12,19 +12,28 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
+  getDocs,
   onSnapshot,
+  query,
   serverTimestamp,
   setDoc,
+  where,
 } from 'firebase/firestore';
 import {
+  BarChart3,
+  Bot,
   Database,
   Download,
+  Edit3,
   LogOut,
   Plus,
   QrCode,
   Save,
   ShieldCheck,
   Trash2,
+  Trophy,
+  Users,
   Utensils,
 } from 'lucide-react';
 import { auth, db } from '../firebase';
@@ -45,6 +54,39 @@ const emptyFoodForm = {
 
 const normalizeBarcode = (value) => String(value || '').replace(/[^\dA-Za-z]/g, '').trim();
 
+const toDate = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  if (typeof value.toDate === 'function') return value.toDate();
+  if (typeof value.seconds === 'number') return new Date(value.seconds * 1000);
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const getWeekKey = (dateValue) => {
+  const date = toDate(dateValue) || new Date();
+  const start = new Date(date.getFullYear(), 0, 1);
+  const dayDiff = Math.floor((date - start) / 86400000);
+  const week = Math.ceil((dayDiff + start.getDay() + 1) / 7);
+  return `${date.getFullYear()}-W${String(week).padStart(2, '0')}`;
+};
+
+const average = (values) => {
+  const validValues = values.map(Number).filter((value) => Number.isFinite(value));
+  if (!validValues.length) return 0;
+  return validValues.reduce((sum, value) => sum + value, 0) / validValues.length;
+};
+
+const getTopFoodName = (scans) => {
+  const counts = scans.reduce((acc, scan) => {
+    const key = scan.foodName || scan.barcode || 'ไม่ระบุ';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  return sorted[0] ? `${sorted[0][0]} (${sorted[0][1]} ครั้ง)` : '-';
+};
+
 const getQrCodeUrl = (barcode, size = 180) => {
   const cleanBarcode = normalizeBarcode(barcode);
   if (!cleanBarcode) return '';
@@ -55,19 +97,41 @@ const getQrCodeUrl = (barcode, size = 180) => {
 export default function AdminPortal() {
   const [authReady, setAuthReady] = useState(false);
   const [admin, setAdmin] = useState(null);
+  const [adminProfile, setAdminProfile] = useState(null);
+  const [activeTab, setActiveTab] = useState('foods');
   const [mode, setMode] = useState('login');
   const [authForm, setAuthForm] = useState({
     displayName: '',
     schoolName: '',
     email: '',
     password: '',
+    botCheck: '',
+    website: '',
   });
   const [authError, setAuthError] = useState('');
+  const [authMessage, setAuthMessage] = useState('');
+  const [botQuestion, setBotQuestion] = useState(() => {
+    const a = Math.floor(2 + Math.random() * 8);
+    const b = Math.floor(2 + Math.random() * 8);
+    return { a, b, answer: a + b };
+  });
   const [foodForm, setFoodForm] = useState(emptyFoodForm);
+  const [editingFoodId, setEditingFoodId] = useState('');
   const [foods, setFoods] = useState([]);
   const [saving, setSaving] = useState(false);
   const [foodError, setFoodError] = useState('');
   const [foodMessage, setFoodMessage] = useState('');
+  const [profileForm, setProfileForm] = useState({ displayName: '', schoolName: '' });
+  const [profileMessage, setProfileMessage] = useState('');
+  const [profileError, setProfileError] = useState('');
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState('');
+  const [reportData, setReportData] = useState({
+    weeklyRows: [],
+    roomRows: [],
+    totalPlayers: 0,
+    totalRooms: 0,
+  });
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -85,16 +149,39 @@ export default function AdminPortal() {
     }
 
     const foodsRef = doc(db, 'admins', admin.uid);
-    setDoc(
-      foodsRef,
-      {
-        uid: admin.uid,
-        email: admin.email || '',
-        displayName: admin.displayName || admin.email || 'Admin',
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    );
+    const loadAdminProfile = async () => {
+      const adminSnap = await getDoc(foodsRef);
+      const profile = adminSnap.exists()
+        ? adminSnap.data()
+        : {
+            uid: admin.uid,
+            email: admin.email || '',
+            displayName: admin.displayName || admin.email || 'Admin',
+            schoolName: '',
+          };
+
+      await setDoc(
+        foodsRef,
+        {
+          uid: admin.uid,
+          email: admin.email || '',
+          displayName: profile.displayName || admin.displayName || admin.email || 'Admin',
+          schoolName: profile.schoolName || '',
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+
+      setAdminProfile(profile);
+      setProfileForm({
+        displayName: profile.displayName || admin.displayName || admin.email || '',
+        schoolName: profile.schoolName || '',
+      });
+    };
+
+    loadAdminProfile().catch((error) => {
+      setProfileError(`โหลดข้อมูล Admin ไม่ได้: ${error.message}`);
+    });
 
     return undefined;
   }, [admin]);
@@ -130,12 +217,30 @@ export default function AdminPortal() {
     return { total, categoryCount };
   }, [foods]);
 
+  useEffect(() => {
+    if (admin && activeTab === 'reports') {
+      loadReports();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [admin, activeTab]);
+
   const handleAuthSubmit = async (event) => {
     event.preventDefault();
     setAuthError('');
+    setAuthMessage('');
 
     try {
       if (mode === 'register') {
+        if (authForm.website.trim()) {
+          setAuthError('ระบบตรวจพบข้อมูลผิดปกติ กรุณาลองใหม่อีกครั้ง');
+          return;
+        }
+
+        if (Number(authForm.botCheck) !== botQuestion.answer) {
+          setAuthError('คำตอบป้องกัน bot ไม่ถูกต้อง');
+          return;
+        }
+
         if (!authForm.schoolName.trim()) {
           setAuthError('กรุณากรอกชื่อโรงเรียน');
           return;
@@ -162,6 +267,20 @@ export default function AdminPortal() {
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+        await signOut(auth);
+        setMode('login');
+        setAuthForm({
+          displayName: '',
+          schoolName: '',
+          email: authForm.email.trim(),
+          password: '',
+          botCheck: '',
+          website: '',
+        });
+        setAuthMessage('สมัครสมาชิกสำเร็จแล้ว กรุณาเข้าสู่ระบบ Admin');
+        const a = Math.floor(2 + Math.random() * 8);
+        const b = Math.floor(2 + Math.random() * 8);
+        setBotQuestion({ a, b, answer: a + b });
       } else {
         await signInWithEmailAndPassword(auth, authForm.email.trim(), authForm.password);
       }
@@ -190,6 +309,30 @@ export default function AdminPortal() {
 
     setSaving(true);
     try {
+      const adminFoodRef = doc(db, 'admins', admin.uid, 'foods', barcode);
+      const globalFoodRef = doc(db, 'foods', barcode);
+      const [adminFoodSnap, globalFoodSnap] = await Promise.all([
+        getDoc(adminFoodRef),
+        getDoc(globalFoodRef),
+      ]);
+      const isEditingSameFood = editingFoodId && editingFoodId === barcode;
+
+      if (adminFoodSnap.exists() && !isEditingSameFood) {
+        setFoodError(`รหัส ${barcode} มีอยู่ในฐานข้อมูลของ Admin นี้แล้ว กรุณาใช้รหัสอื่น`);
+        setSaving(false);
+        return;
+      }
+
+      if (
+        globalFoodSnap.exists() &&
+        !isEditingSameFood &&
+        globalFoodSnap.data()?.ownerAdminId !== admin.uid
+      ) {
+        setFoodError(`รหัส ${barcode} ถูกใช้แล้วในระบบ ไม่สามารถสร้าง QR Code ซ้ำได้`);
+        setSaving(false);
+        return;
+      }
+
       const foodData = {
         barcode,
         qrCodeValue: barcode,
@@ -205,19 +348,27 @@ export default function AdminPortal() {
       };
 
       await setDoc(
-        doc(db, 'admins', admin.uid, 'foods', barcode),
+        adminFoodRef,
         foodData,
         { merge: true },
       );
 
       // สำเนากลางสำหรับห้องเก่าหรือกรณี fallback ตอนสแกน
       await setDoc(
-        doc(db, 'foods', barcode),
+        globalFoodRef,
         foodData,
         { merge: true },
       );
 
+      if (editingFoodId && editingFoodId !== barcode) {
+        await Promise.all([
+          deleteDoc(doc(db, 'admins', admin.uid, 'foods', editingFoodId)),
+          deleteDoc(doc(db, 'foods', editingFoodId)),
+        ]);
+      }
+
       setFoodForm(emptyFoodForm);
+      setEditingFoodId('');
       setFoodMessage(`บันทึกข้อมูล ${foodData.name} เรียบร้อยแล้ว`);
     } catch (error) {
       console.error('Save food error:', error);
@@ -232,8 +383,10 @@ export default function AdminPortal() {
   };
 
   const handleEditFood = (food) => {
+    const barcode = normalizeBarcode(food.barcode || food.id);
+    setEditingFoodId(barcode);
     setFoodForm({
-      barcode: food.barcode || food.id || '',
+      barcode,
       name: food.name || '',
       category: food.category || 'ขนม',
       sugar: food.sugar ?? '',
@@ -251,7 +404,117 @@ export default function AdminPortal() {
     if (!barcode) return;
     if (!window.confirm(`ต้องการลบ ${food.name || barcode} ใช่ไหม?`)) return;
 
-    await deleteDoc(doc(db, 'admins', admin.uid, 'foods', barcode));
+    await Promise.all([
+      deleteDoc(doc(db, 'admins', admin.uid, 'foods', barcode)),
+      deleteDoc(doc(db, 'foods', barcode)),
+    ]);
+  };
+
+  const handleProfileSubmit = async (event) => {
+    event.preventDefault();
+    if (!admin) return;
+
+    setProfileError('');
+    setProfileMessage('');
+
+    if (!profileForm.schoolName.trim()) {
+      setProfileError('กรุณากรอกชื่อโรงเรียน');
+      return;
+    }
+
+    try {
+      if (profileForm.displayName.trim()) {
+        await updateProfile(admin, { displayName: profileForm.displayName.trim() });
+      }
+
+      const nextProfile = {
+        uid: admin.uid,
+        email: admin.email || '',
+        displayName: profileForm.displayName.trim() || admin.email || 'Admin',
+        schoolName: profileForm.schoolName.trim(),
+        role: 'admin',
+        updatedAt: serverTimestamp(),
+      };
+
+      await setDoc(doc(db, 'admins', admin.uid), nextProfile, { merge: true });
+      setAdminProfile(nextProfile);
+      setProfileMessage('อัปเดตข้อมูล Admin เรียบร้อยแล้ว');
+    } catch (error) {
+      setProfileError(`อัปเดตข้อมูลไม่ได้: ${error.message}`);
+    }
+  };
+
+  const loadReports = async () => {
+    if (!admin) return;
+
+    setReportLoading(true);
+    setReportError('');
+
+    try {
+      const roomsSnap = await getDocs(query(collection(db, 'rooms'), where('adminId', '==', admin.uid)));
+      const rooms = roomsSnap.docs.map((roomDoc) => ({ id: roomDoc.id, ...roomDoc.data() }));
+      const roomRows = [];
+      const weeklyMap = new Map();
+
+      for (const room of rooms) {
+        const [playersSnap, scansSnap] = await Promise.all([
+          getDocs(collection(db, 'rooms', room.id, 'players')),
+          getDocs(collection(db, 'rooms', room.id, 'scans')),
+        ]);
+        const players = playersSnap.docs.map((playerDoc) => ({ id: playerDoc.id, ...playerDoc.data() }));
+        const scans = scansSnap.docs.map((scanDoc) => ({ id: scanDoc.id, ...scanDoc.data() }));
+        const roomDate = room.finishedAt || room.createdAt || room.updatedAt;
+        const weekKey = getWeekKey(roomDate);
+        const avgScore = average(players.map((player) => player.score));
+
+        roomRows.push({
+          roomCode: room.id,
+          weekKey,
+          createdAt: toDate(roomDate),
+          playerCount: players.length,
+          scanCount: scans.length,
+          avgScore,
+          topFood: getTopFoodName(scans),
+        });
+
+        if (!weeklyMap.has(weekKey)) {
+          weeklyMap.set(weekKey, {
+            weekKey,
+            roomCount: 0,
+            playerCount: 0,
+            scanCount: 0,
+            scores: [],
+            scans: [],
+          });
+        }
+
+        const weekly = weeklyMap.get(weekKey);
+        weekly.roomCount += 1;
+        weekly.playerCount += players.length;
+        weekly.scanCount += scans.length;
+        weekly.scores.push(...players.map((player) => Number(player.score || 0)));
+        weekly.scans.push(...scans);
+      }
+
+      const weeklyRows = Array.from(weeklyMap.values())
+        .map((row) => ({
+          ...row,
+          avgScore: average(row.scores),
+          topFood: getTopFoodName(row.scans),
+        }))
+        .sort((a, b) => b.weekKey.localeCompare(a.weekKey));
+
+      setReportData({
+        weeklyRows,
+        roomRows: roomRows.sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0)),
+        totalPlayers: roomRows.reduce((sum, room) => sum + room.playerCount, 0),
+        totalRooms: roomRows.length,
+      });
+    } catch (error) {
+      setReportError(`โหลดรายงานไม่ได้: ${error.message}`);
+    } finally {
+      setReportLoading(false);
+    }
   };
 
   if (!authReady) {
@@ -296,6 +559,14 @@ export default function AdminPortal() {
             {mode === 'register' && (
               <>
                 <input
+                  tabIndex="-1"
+                  autoComplete="off"
+                  value={authForm.website}
+                  onChange={(e) => setAuthForm({ ...authForm, website: e.target.value })}
+                  className="hidden"
+                  aria-hidden="true"
+                />
+                <input
                   value={authForm.displayName}
                   onChange={(e) => setAuthForm({ ...authForm, displayName: e.target.value })}
                   placeholder="ชื่อ Admin / ชื่อครู"
@@ -308,6 +579,19 @@ export default function AdminPortal() {
                   placeholder="ชื่อโรงเรียน / วิทยาลัย"
                   className="w-full mb-3 px-4 py-4 rounded-2xl bg-slate-950/70 border border-white/10 outline-none focus:border-cyan-300"
                 />
+                <div className="mb-3 rounded-2xl border border-lime-300/20 bg-lime-300/10 p-4">
+                  <label className="mb-2 flex items-center gap-2 text-sm font-black text-lime-200">
+                    <Bot size={18} /> ป้องกัน bot: {botQuestion.a} + {botQuestion.b} = ?
+                  </label>
+                  <input
+                    required
+                    type="number"
+                    value={authForm.botCheck}
+                    onChange={(e) => setAuthForm({ ...authForm, botCheck: e.target.value })}
+                    placeholder="กรอกคำตอบ"
+                    className="w-full px-4 py-3 rounded-xl bg-slate-950/70 border border-white/10 outline-none focus:border-lime-300"
+                  />
+                </div>
               </>
             )}
 
@@ -331,6 +615,7 @@ export default function AdminPortal() {
             />
 
             {authError && <div className="mb-4 bg-rose-500/15 text-rose-200 border border-rose-400/30 rounded-2xl p-3 font-bold">{authError}</div>}
+            {authMessage && <div className="mb-4 bg-lime-300/15 text-lime-100 border border-lime-300/30 rounded-2xl p-3 font-bold">{authMessage}</div>}
 
             <button className="w-full bg-gradient-to-r from-lime-300 to-cyan-300 text-slate-950 font-black py-4 rounded-2xl">
               {mode === 'register' ? 'สมัครสมาชิก Admin' : 'เข้าสู่ระบบ Admin'}
@@ -352,6 +637,9 @@ export default function AdminPortal() {
             <div>
               <h1 className="text-2xl font-black">Admin Food Database</h1>
               <p className="text-cyan-300 text-sm font-bold">{admin.displayName || admin.email}</p>
+              {adminProfile?.schoolName && (
+                <p className="text-lime-200 text-xs font-black mt-1">{adminProfile.schoolName}</p>
+              )}
             </div>
           </div>
 
@@ -369,6 +657,31 @@ export default function AdminPortal() {
         </div>
       </header>
 
+      <div className="max-w-7xl mx-auto px-5 pt-6">
+        <div className="flex flex-wrap gap-2 rounded-3xl border border-white/10 bg-white/[0.05] p-2">
+          {[
+            { id: 'foods', label: 'ฐานอาหาร', icon: Utensils },
+            { id: 'profile', label: 'ข้อมูล Admin', icon: Edit3 },
+            { id: 'reports', label: 'รายงานสรุป', icon: BarChart3 },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 rounded-2xl px-5 py-3 font-black ${
+                  activeTab === tab.id ? 'bg-cyan-300 text-slate-950' : 'text-slate-200 hover:bg-white/10'
+                }`}
+              >
+                <Icon size={18} /> {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {activeTab === 'foods' && (
       <main className="max-w-7xl mx-auto px-5 py-7 grid xl:grid-cols-[420px_1fr] gap-6">
         <section className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
@@ -510,6 +823,145 @@ export default function AdminPortal() {
           </div>
         </section>
       </main>
+      )}
+
+      {activeTab === 'profile' && (
+        <main className="max-w-4xl mx-auto w-full px-5 py-7">
+          <form onSubmit={handleProfileSubmit} className="bg-white/[0.07] border border-cyan-300/15 rounded-3xl p-6">
+            <h2 className="text-2xl font-black mb-5 flex items-center gap-2">
+              <Edit3 className="text-cyan-300" /> แก้ไขข้อมูล Admin / ผู้สร้างห้อง
+            </h2>
+            <div className="grid md:grid-cols-2 gap-4">
+              <label className="block">
+                <span className="block mb-2 text-sm font-black text-cyan-200">ชื่อ Admin / ชื่อครู</span>
+                <input
+                  value={profileForm.displayName}
+                  onChange={(e) => setProfileForm({ ...profileForm, displayName: e.target.value })}
+                  className="w-full px-4 py-4 rounded-2xl bg-slate-950/70 border border-white/10 outline-none focus:border-cyan-300"
+                />
+              </label>
+              <label className="block">
+                <span className="block mb-2 text-sm font-black text-cyan-200">ชื่อโรงเรียน / วิทยาลัย</span>
+                <input
+                  required
+                  value={profileForm.schoolName}
+                  onChange={(e) => setProfileForm({ ...profileForm, schoolName: e.target.value })}
+                  className="w-full px-4 py-4 rounded-2xl bg-slate-950/70 border border-white/10 outline-none focus:border-cyan-300"
+                />
+              </label>
+            </div>
+            <div className="mt-4 rounded-2xl bg-slate-950/50 border border-white/10 p-4 text-sm font-bold text-slate-300">
+              อีเมล: <span className="text-white">{admin.email}</span>
+            </div>
+            {profileError && <div className="mt-4 rounded-2xl border border-rose-400/30 bg-rose-500/15 p-3 font-bold text-rose-100">{profileError}</div>}
+            {profileMessage && <div className="mt-4 rounded-2xl border border-lime-300/30 bg-lime-300/15 p-3 font-bold text-lime-100">{profileMessage}</div>}
+            <button className="mt-5 w-full md:w-auto px-8 py-4 rounded-2xl bg-cyan-300 text-slate-950 font-black inline-flex items-center justify-center gap-2">
+              <Save size={20} /> บันทึกข้อมูล Admin
+            </button>
+          </form>
+        </main>
+      )}
+
+      {activeTab === 'reports' && (
+        <main className="max-w-7xl mx-auto w-full px-5 py-7 space-y-6">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-2xl font-black flex items-center gap-2"><BarChart3 className="text-cyan-300" /> รายงานสรุปการเล่นเกม</h2>
+              <p className="text-slate-400 font-bold text-sm mt-1">คะแนนเฉลี่ยรายสัปดาห์, รายห้อง, จำนวนผู้เล่น และขนมที่เลือกบ่อย</p>
+            </div>
+            <button
+              type="button"
+              onClick={loadReports}
+              disabled={reportLoading}
+              className="px-5 py-3 rounded-2xl bg-cyan-300 text-slate-950 font-black disabled:opacity-60"
+            >
+              {reportLoading ? 'กำลังโหลด...' : 'รีเฟรชรายงาน'}
+            </button>
+          </div>
+          {reportError && <div className="rounded-2xl border border-rose-400/30 bg-rose-500/15 p-3 font-bold text-rose-100">{reportError}</div>}
+          <div className="grid md:grid-cols-3 gap-4">
+            <div className="bg-white/[0.07] border border-white/10 rounded-2xl p-5">
+              <Trophy className="text-amber-300 mb-3" />
+              <div className="text-3xl font-black">{average(reportData.roomRows.map((room) => room.avgScore)).toFixed(2)}</div>
+              <div className="text-slate-400 font-bold text-sm">คะแนนเฉลี่ยรวม</div>
+            </div>
+            <div className="bg-white/[0.07] border border-white/10 rounded-2xl p-5">
+              <Users className="text-lime-300 mb-3" />
+              <div className="text-3xl font-black">{reportData.totalPlayers}</div>
+              <div className="text-slate-400 font-bold text-sm">จำนวนผู้เล่นทั้งหมด</div>
+            </div>
+            <div className="bg-white/[0.07] border border-white/10 rounded-2xl p-5">
+              <Database className="text-cyan-300 mb-3" />
+              <div className="text-3xl font-black">{reportData.totalRooms}</div>
+              <div className="text-slate-400 font-bold text-sm">จำนวนห้องเกม</div>
+            </div>
+          </div>
+          <section className="bg-white/[0.07] border border-white/10 rounded-3xl overflow-hidden">
+            <div className="p-5 border-b border-white/10 font-black text-xl">สรุปรายสัปดาห์</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="text-xs uppercase tracking-widest text-cyan-300 bg-slate-950/40">
+                  <tr>
+                    <th className="p-4">สัปดาห์</th>
+                    <th className="p-4 text-right">คะแนนเฉลี่ย</th>
+                    <th className="p-4 text-right">จำนวนห้อง</th>
+                    <th className="p-4 text-right">ผู้เล่น</th>
+                    <th className="p-4 text-right">สแกนทั้งหมด</th>
+                    <th className="p-4">ขนมที่เลือกบ่อย</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reportData.weeklyRows.map((row) => (
+                    <tr key={row.weekKey} className="border-t border-white/10">
+                      <td className="p-4 font-black">{row.weekKey}</td>
+                      <td className="p-4 text-right">{row.avgScore.toFixed(2)}</td>
+                      <td className="p-4 text-right">{row.roomCount}</td>
+                      <td className="p-4 text-right">{row.playerCount}</td>
+                      <td className="p-4 text-right">{row.scanCount}</td>
+                      <td className="p-4">{row.topFood}</td>
+                    </tr>
+                  ))}
+                  {reportData.weeklyRows.length === 0 && (
+                    <tr><td colSpan="6" className="p-8 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลรายงาน</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section className="bg-white/[0.07] border border-white/10 rounded-3xl overflow-hidden">
+            <div className="p-5 border-b border-white/10 font-black text-xl">คะแนนเฉลี่ยแต่ละห้อง</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="text-xs uppercase tracking-widest text-cyan-300 bg-slate-950/40">
+                  <tr>
+                    <th className="p-4">รหัสห้อง</th>
+                    <th className="p-4">สัปดาห์</th>
+                    <th className="p-4 text-right">คะแนนเฉลี่ย</th>
+                    <th className="p-4 text-right">ผู้เล่น</th>
+                    <th className="p-4 text-right">สแกน</th>
+                    <th className="p-4">ขนมที่เลือกบ่อย</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reportData.roomRows.map((row) => (
+                    <tr key={row.roomCode} className="border-t border-white/10">
+                      <td className="p-4 font-mono text-cyan-100">{row.roomCode}</td>
+                      <td className="p-4">{row.weekKey}</td>
+                      <td className="p-4 text-right">{row.avgScore.toFixed(2)}</td>
+                      <td className="p-4 text-right">{row.playerCount}</td>
+                      <td className="p-4 text-right">{row.scanCount}</td>
+                      <td className="p-4">{row.topFood}</td>
+                    </tr>
+                  ))}
+                  {reportData.roomRows.length === 0 && (
+                    <tr><td colSpan="6" className="p-8 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลห้องเกม</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </main>
+      )}
     </div>
   );
 }
