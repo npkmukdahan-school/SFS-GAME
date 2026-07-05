@@ -56,6 +56,8 @@ export default function AdminPortal() {
   const [foodForm, setFoodForm] = useState(emptyFoodForm);
   const [foods, setFoods] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [foodError, setFoodError] = useState('');
+  const [foodMessage, setFoodMessage] = useState('');
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -90,12 +92,19 @@ export default function AdminPortal() {
   useEffect(() => {
     if (!admin) return undefined;
 
-    const unsubscribe = onSnapshot(collection(db, 'admins', admin.uid, 'foods'), (snapshot) => {
-      const items = snapshot.docs
-        .map((foodDoc) => ({ id: foodDoc.id, ...foodDoc.data() }))
-        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'th'));
-      setFoods(items);
-    });
+    const unsubscribe = onSnapshot(
+      collection(db, 'admins', admin.uid, 'foods'),
+      (snapshot) => {
+        const items = snapshot.docs
+          .map((foodDoc) => ({ id: foodDoc.id, ...foodDoc.data() }))
+          .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'th'));
+        setFoods(items);
+        setFoodError('');
+      },
+      (error) => {
+        setFoodError(`โหลดฐานข้อมูลอาหารไม่ได้: ${error.message}`);
+      },
+    );
 
     return () => unsubscribe();
   }, [admin]);
@@ -150,30 +159,56 @@ export default function AdminPortal() {
     if (!admin) return;
 
     const barcode = normalizeBarcode(foodForm.barcode);
+    setFoodError('');
+    setFoodMessage('');
+
     if (!barcode) {
-      alert('กรุณากรอกรหัสบาร์โค้ด');
+      setFoodError('กรุณากรอกรหัสบาร์โค้ด');
+      return;
+    }
+
+    if (!foodForm.name.trim()) {
+      setFoodError('กรุณากรอกชื่ออาหาร/ขนม/เครื่องดื่ม');
       return;
     }
 
     setSaving(true);
     try {
+      const foodData = {
+        barcode,
+        name: foodForm.name.trim(),
+        category: foodForm.category,
+        sugar: Number(foodForm.sugar || 0),
+        fat: Number(foodForm.fat || 0),
+        sodium: Number(foodForm.sodium || 0),
+        videoUrl: foodForm.videoUrl.trim(),
+        imageUrl: foodForm.imageUrl.trim(),
+        ownerAdminId: admin.uid,
+        updatedAt: serverTimestamp(),
+      };
+
       await setDoc(
         doc(db, 'admins', admin.uid, 'foods', barcode),
-        {
-          barcode,
-          name: foodForm.name.trim(),
-          category: foodForm.category,
-          sugar: Number(foodForm.sugar || 0),
-          fat: Number(foodForm.fat || 0),
-          sodium: Number(foodForm.sodium || 0),
-          videoUrl: foodForm.videoUrl.trim(),
-          imageUrl: foodForm.imageUrl.trim(),
-          ownerAdminId: admin.uid,
-          updatedAt: serverTimestamp(),
-        },
+        foodData,
         { merge: true },
       );
+
+      // สำเนากลางสำหรับห้องเก่าหรือกรณี fallback ตอนสแกน
+      await setDoc(
+        doc(db, 'foods', barcode),
+        foodData,
+        { merge: true },
+      );
+
       setFoodForm(emptyFoodForm);
+      setFoodMessage(`บันทึกข้อมูล ${foodData.name} เรียบร้อยแล้ว`);
+    } catch (error) {
+      console.error('Save food error:', error);
+      setFoodError(
+        error?.code === 'permission-denied'
+          ? 'บันทึกไม่ได้: Firestore Rules ยังไม่อนุญาตให้เขียนข้อมูลอาหาร กรุณาอัปเดต Rules แล้วกด Publish'
+          : `บันทึกไม่ได้: ${error.message || 'เกิดข้อผิดพลาดไม่ทราบสาเหตุ'}`,
+      );
     } finally {
       setSaving(false);
     }
@@ -341,6 +376,16 @@ export default function AdminPortal() {
               </div>
               <input value={foodForm.videoUrl} onChange={(e) => setFoodForm({ ...foodForm, videoUrl: e.target.value })} placeholder="ลิงก์วิดีโอ YouTube / Google Drive / MP4" className="w-full px-4 py-3 rounded-xl bg-slate-950/70 border border-white/10 outline-none focus:border-cyan-300" />
               <input value={foodForm.imageUrl} onChange={(e) => setFoodForm({ ...foodForm, imageUrl: e.target.value })} placeholder="ลิงก์รูปสินค้า (ถ้ามี)" className="w-full px-4 py-3 rounded-xl bg-slate-950/70 border border-white/10 outline-none focus:border-cyan-300" />
+              {foodError && (
+                <div className="rounded-2xl border border-rose-400/30 bg-rose-500/15 p-3 text-sm font-bold text-rose-100">
+                  {foodError}
+                </div>
+              )}
+              {foodMessage && (
+                <div className="rounded-2xl border border-lime-300/30 bg-lime-300/15 p-3 text-sm font-bold text-lime-100">
+                  {foodMessage}
+                </div>
+              )}
               <button disabled={saving} className="w-full py-4 rounded-2xl bg-cyan-400 text-slate-950 font-black flex items-center justify-center gap-2 disabled:opacity-60">
                 <Save size={20} /> {saving ? 'กำลังบันทึก...' : 'บันทึกข้อมูล'}
               </button>
