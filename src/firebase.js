@@ -21,7 +21,7 @@ const missingEnvKeys = Object.entries(firebaseConfig)
 
 if (missingEnvKeys.length > 0) {
   console.warn(
-    `Firebase config is missing: ${missingEnvKeys.join(', ')}. Check your .env.local file.`,
+    `Firebase config is missing: ${missingEnvKeys.join(', ')}. Check your .env.local file for localhost or GitHub Secrets for GitHub Pages.`,
   );
 }
 
@@ -30,4 +30,3 @@ export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const realtimeDb = getDatabase(app);
 export const storage = getStorage(app);
-
