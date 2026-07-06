@@ -1,5 +1,5 @@
 // src/components/HomePage.jsx
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   BookOpen,
@@ -63,7 +63,32 @@ const foodCards = [
   { emoji: '🍦', label: 'ไอศกรีม', color: 'bg-pink-100 text-pink-700 border-pink-200' },
 ];
 
+const heroSlides = [
+  {
+    src: GAME_LOGO_URL,
+    alt: 'โลโก้เกมลับ จับหวานมันเค็ม SFS-GAME',
+    label: 'SFS-GAME',
+    imageClass: 'object-contain bg-white p-4',
+  },
+  {
+    src: GDA_BANNER_URL,
+    alt: 'ก่อนกินเช็ก GDA สนุกได้ สุขภาพดีด้วย',
+    label: 'เช็ก GDA',
+    imageClass: 'object-contain bg-white',
+  },
+];
+
 export default function HomePage() {
+  const [activeSlide, setActiveSlide] = useState(0);
+
+  useEffect(() => {
+    const slideTimer = window.setInterval(() => {
+      setActiveSlide((prev) => (prev + 1) % heroSlides.length);
+    }, 4200);
+
+    return () => window.clearInterval(slideTimer);
+  }, [heroSlides.length]);
+
   return (
     <div className="min-h-screen bg-white text-slate-900 overflow-hidden">
       <div className="absolute inset-0 pointer-events-none">
@@ -113,12 +138,13 @@ export default function HomePage() {
               <Sparkles size={18} /> เกมเรียนรู้ฉลากโภชนาการสำหรับเด็ก
             </div>
 
-            <h1 className="text-4xl md:text-6xl font-black leading-tight text-slate-950">
-              ภารกิจสายลับ
-              <span className="block text-transparent bg-clip-text bg-gradient-to-r from-cyan-500 via-lime-500 to-amber-400">
-                เลือกกินให้ฉลาด
-              </span>
-            </h1>
+            <div className="relative max-w-2xl">
+              <img
+                src={GDA_BANNER_URL}
+                alt="ก่อนกินเช็ก GDA สนุกได้ สุขภาพดีด้วย"
+                className="w-full rounded-[2rem] border-4 border-white bg-white shadow-2xl shadow-cyan-100"
+              />
+            </div>
 
             <p className="mt-5 text-lg md:text-xl text-slate-600 font-semibold leading-relaxed">
               สื่อเกมสำหรับกิจกรรม อย.น้อย ให้นักเรียนเรียนรู้เรื่องหวาน มัน เค็ม ผ่านการสแกน QR Code
@@ -176,9 +202,9 @@ export default function HomePage() {
               <div className="p-6">
                 <div className="relative">
                   <img
-                    src={GDA_BANNER_URL}
-                    alt="ก่อนกินเช็ก GDA สนุกได้ สุขภาพดีด้วย"
-                    className="w-full object-cover rounded-[2rem] border-4 border-white bg-white shadow-lg"
+                    src={heroSlides[activeSlide].src}
+                    alt={heroSlides[activeSlide].alt}
+                    className={`w-full h-[280px] rounded-[2rem] border-4 border-white shadow-lg transition-all duration-500 ${heroSlides[activeSlide].imageClass}`}
                   />
                   <div className="absolute -bottom-4 left-4 flex items-center gap-2 rounded-2xl bg-white/95 px-3 py-2 shadow-lg border border-cyan-100">
                     <img
@@ -195,7 +221,23 @@ export default function HomePage() {
                   </div>
                 </div>
 
-                <div className="mt-9 grid grid-cols-3 gap-3">
+                <div className="mt-7 flex items-center justify-center gap-2">
+                  {heroSlides.map((slide, index) => (
+                    <button
+                      key={slide.label}
+                      type="button"
+                      onClick={() => setActiveSlide(index)}
+                      className={`h-3 rounded-full transition-all ${
+                        activeSlide === index
+                          ? 'w-10 bg-cyan-500'
+                          : 'w-3 bg-slate-300 hover:bg-slate-400'
+                      }`}
+                      aria-label={`แสดงภาพ ${slide.label}`}
+                    />
+                  ))}
+                </div>
+
+                <div className="mt-5 grid grid-cols-3 gap-3">
                   <div className="rounded-2xl bg-cyan-50 p-4 text-center border border-cyan-100">
                     <Camera className="mx-auto text-cyan-600 mb-2" />
                     <div className="text-xs font-black text-cyan-700">สแกนง่าย</div>
