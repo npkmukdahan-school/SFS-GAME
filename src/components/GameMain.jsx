@@ -10,7 +10,6 @@ import {
   Clock,
   PauseCircle,
   RefreshCcw,
-  ZoomIn,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { db } from '../firebase';
@@ -356,7 +355,7 @@ export default function GameMain() {
   const videoRef = useRef(null);
   const codeReader = useRef(null);
   const streamRef = useRef(null);
-  const trackRef = useRef(null);
+  const scannerActiveRef = useRef(false);
   const audioContextRef = useRef(null);
   const waitingVoiceTimerRef = useRef(null);
 
@@ -368,11 +367,6 @@ export default function GameMain() {
 
   const [cameraError, setCameraError] = useState('');
   const [facingMode, setFacingMode] = useState('environment');
-  const [zoomSupported, setZoomSupported] = useState(false);
-  const [zoomLevel, setZoomLevel] = useState(1);
-  const [zoomMin, setZoomMin] = useState(1);
-  const [zoomMax, setZoomMax] = useState(1);
-  const [zoomStep, setZoomStep] = useState(0.1);
 
   const latestState = useRef({
     scoreSum,
@@ -504,7 +498,7 @@ export default function GameMain() {
     if (step === 'playing' && !isPaused && !showVideoModal && !cameraError) {
       const hints = [
         'เล็ง QR Code ให้อยู่กลางกรอบ',
-        'ถ้าอ่านไม่ติด ให้ซูมเข้าเล็กน้อย',
+        'ขยับมือถือเข้าใกล้ QR Code อีกเล็กน้อยถ้าอ่านไม่ติด',
         'ระวังแสงสะท้อนบนกระดาษหรือหน้าจอ',
         'ถือกล้องให้นิ่งประมาณ 1 วินาที',
         'QR Code เอียงเล็กน้อยอ่านได้ แต่ไม่ควรเบลอ',
@@ -554,7 +548,6 @@ export default function GameMain() {
       step === 'playing' &&
       !isPaused &&
       !showVideoModal &&
-      timeRemaining > 0 &&
       codeReader.current
     ) {
       startScanner();
@@ -567,23 +560,27 @@ export default function GameMain() {
       codeReader.current?.reset();
       stopCamera();
     };
-  }, [step, isPaused, showVideoModal, facingMode, timeRemaining]);
+  }, [step, isPaused, showVideoModal, facingMode]);
 
   function stopCamera() {
+    scannerActiveRef.current = false;
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
     }
 
     streamRef.current = null;
-    trackRef.current = null;
   }
 
   async function startScanner() {
+    if (scannerActiveRef.current) return;
+
     setCameraError('');
-    setZoomSupported(false);
+    scannerActiveRef.current = true;
 
     try {
       stopCamera();
+      scannerActiveRef.current = true;
       codeReader.current?.reset();
 
       const constraints = {
@@ -608,63 +605,19 @@ export default function GameMain() {
         }
       });
 
-      window.setTimeout(setupCameraTrackControls, 250);
+      window.setTimeout(rememberCameraStream, 250);
     } catch (err) {
       console.error('Camera access error:', err);
+      scannerActiveRef.current = false;
       setCameraError('ไม่สามารถเปิดกล้องได้ กรุณาอนุญาตสิทธิ์กล้อง หรือเปิดผ่าน HTTPS/localhost');
     }
   }
 
-  function setupCameraTrackControls() {
+  function rememberCameraStream() {
     const stream = videoRef.current?.srcObject;
     if (!stream) return;
 
     streamRef.current = stream;
-    const track = stream.getVideoTracks?.()[0];
-    if (!track) return;
-
-    trackRef.current = track;
-
-    const capabilities =
-      typeof track.getCapabilities === 'function' ? track.getCapabilities() : {};
-    const settings = typeof track.getSettings === 'function' ? track.getSettings() : {};
-
-    if (capabilities.zoom) {
-      const min = capabilities.zoom.min ?? 1;
-      const max = capabilities.zoom.max ?? 1;
-      const stepValue = capabilities.zoom.step ?? 0.1;
-      const current = settings.zoom ?? min;
-
-      setZoomSupported(true);
-      setZoomMin(min);
-      setZoomMax(max);
-      setZoomStep(stepValue);
-      setZoomLevel(current);
-    } else {
-      setZoomSupported(false);
-      setZoomMin(1);
-      setZoomMax(1);
-      setZoomStep(0.1);
-      setZoomLevel(1);
-    }
-  }
-
-  async function applyZoom(nextZoom) {
-    const track = trackRef.current;
-    if (!track || !zoomSupported) return;
-
-    try {
-      await track.applyConstraints({ advanced: [{ zoom: nextZoom }] });
-    } catch (err) {
-      console.warn('Zoom is not supported on this device/browser:', err);
-      setZoomSupported(false);
-    }
-  }
-
-  function handleZoomChange(e) {
-    const nextZoom = Number(e.target.value);
-    setZoomLevel(nextZoom);
-    applyZoom(nextZoom);
   }
 
   function toggleCamera() {
@@ -1391,30 +1344,6 @@ export default function GameMain() {
                   </div>
                 )}
               </div>
-
-              {!cameraError && (
-                <div className="w-full px-2 mb-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-black text-cyan-300 flex items-center gap-1">
-                      <ZoomIn size={16} /> ซูมกล้อง
-                    </span>
-                    <span className="text-xs text-slate-400">
-                      {zoomSupported ? `${Number(zoomLevel).toFixed(1)}x` : 'อุปกรณ์นี้ไม่รองรับซูมผ่านเว็บ'}
-                    </span>
-                  </div>
-
-                  <input
-                    type="range"
-                    min={zoomMin}
-                    max={zoomMax}
-                    step={zoomStep}
-                    value={zoomLevel}
-                    disabled={!zoomSupported}
-                    onChange={handleZoomChange}
-                    className="w-full accent-cyan-500 disabled:opacity-30"
-                  />
-                </div>
-              )}
 
               {!cameraError && (
                 <div className="text-center mb-4 min-h-[40px] flex items-center justify-center px-4">
