@@ -530,9 +530,24 @@ export default function AdminPortal() {
       <div className="min-h-screen bg-[#071524] text-white flex items-center justify-center p-5">
         <div className="w-full max-w-5xl grid lg:grid-cols-[0.9fr_1.1fr] gap-6 items-center">
           <div className="text-center lg:text-left">
-            <img src={GAME_LOGO_URL} alt="SFS-GAME" className="w-56 mx-auto lg:mx-0 mb-5" />
-            <h1 className="text-4xl font-black mb-4">ระบบ Admin SFS-GAME</h1>
-            <p className="text-slate-300 font-semibold leading-relaxed">
+            <div className="relative inline-block mb-6">
+              <div className="absolute inset-3 rounded-[2rem] bg-cyan-400/25 blur-2xl" />
+              <img
+                src={GAME_LOGO_URL}
+                alt="SFS-GAME"
+                className="relative w-60 mx-auto lg:mx-0 rounded-[2rem] border-4 border-white/15 bg-white/95 p-3 shadow-[0_24px_70px_rgba(34,211,238,0.32)]"
+              />
+            </div>
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-cyan-200 shadow-lg shadow-cyan-950/20">
+              Admin Control Center
+            </div>
+            <h1 className="mb-4 text-4xl md:text-5xl font-black leading-tight text-transparent bg-clip-text bg-gradient-to-r from-cyan-200 via-lime-200 to-amber-200 drop-shadow-[0_8px_24px_rgba(34,211,238,0.28)]">
+              ระบบ Admin
+              <span className="block text-white drop-shadow-[0_8px_22px_rgba(255,255,255,0.16)]">
+                SFS-GAME
+              </span>
+            </h1>
+            <p className="text-slate-200 font-semibold leading-relaxed drop-shadow-sm">
               สมัครสมาชิกเพื่อสร้างฐานข้อมูลอาหาร เครื่องดื่ม ขนม และไอศกรีมของตนเอง
               จากนั้นสร้างห้องเกมให้นักเรียนสแกนจากฐานข้อมูลของ Admin คนนั้นโดยเฉพาะ
             </p>
