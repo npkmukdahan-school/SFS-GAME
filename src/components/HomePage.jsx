@@ -19,6 +19,7 @@ import {
 
 const PUBLIC_BASE_URL = import.meta.env.BASE_URL || '/';
 const GAME_LOGO_URL = `${PUBLIC_BASE_URL}sfs-game-logo.png`;
+const GDA_BANNER_URL = `${PUBLIC_BASE_URL}gda-healthy-banner.png`;
 const KNOWLEDGE_PDF_URL = 'https://phan.moph.go.th/kanya/download/page02/16.pdf';
 
 const learningSteps = [
@@ -173,13 +174,28 @@ export default function HomePage() {
               </div>
 
               <div className="p-6">
-                <img
-                  src={GAME_LOGO_URL}
-                  alt="โลโก้ SFS-GAME"
-                  className="w-full max-w-[390px] mx-auto object-contain rounded-[2rem] border-4 border-cyan-100 bg-white shadow-lg"
-                />
+                <div className="relative">
+                  <img
+                    src={GDA_BANNER_URL}
+                    alt="ก่อนกินเช็ก GDA สนุกได้ สุขภาพดีด้วย"
+                    className="w-full object-cover rounded-[2rem] border-4 border-white bg-white shadow-lg"
+                  />
+                  <div className="absolute -bottom-4 left-4 flex items-center gap-2 rounded-2xl bg-white/95 px-3 py-2 shadow-lg border border-cyan-100">
+                    <img
+                      src={GAME_LOGO_URL}
+                      alt="SFS-GAME"
+                      className="w-12 h-12 object-contain rounded-xl border border-cyan-100"
+                    />
+                    <div>
+                      <div className="text-[10px] font-black text-cyan-600 uppercase tracking-widest">
+                        Learning Game
+                      </div>
+                      <div className="text-sm font-black text-slate-900">เกมลับจับหวานมันเค็ม</div>
+                    </div>
+                  </div>
+                </div>
 
-                <div className="mt-5 grid grid-cols-3 gap-3">
+                <div className="mt-9 grid grid-cols-3 gap-3">
                   <div className="rounded-2xl bg-cyan-50 p-4 text-center border border-cyan-100">
                     <Camera className="mx-auto text-cyan-600 mb-2" />
                     <div className="text-xs font-black text-cyan-700">สแกนง่าย</div>
