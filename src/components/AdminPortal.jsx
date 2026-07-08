@@ -19,6 +19,7 @@ import {
   serverTimestamp,
   setDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 import {
   BarChart3,
@@ -69,6 +70,21 @@ const getWeekKey = (dateValue) => {
   const dayDiff = Math.floor((date - start) / 86400000);
   const week = Math.ceil((dayDiff + start.getDay() + 1) / 7);
   return `${date.getFullYear()}-W${String(week).padStart(2, '0')}`;
+};
+
+const getDayKey = (dateValue) => {
+  const date = toDate(dateValue) || new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
+const formatThaiDate = (dateValue) => {
+  const date = toDate(dateValue);
+  if (!date) return '-';
+  return date.toLocaleDateString('th-TH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
 };
 
 const average = (values) => {
@@ -127,6 +143,7 @@ export default function AdminPortal() {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState('');
   const [reportData, setReportData] = useState({
+    dailyRows: [],
     weeklyRows: [],
     roomRows: [],
     totalPlayers: 0,
@@ -454,6 +471,7 @@ export default function AdminPortal() {
       const roomsSnap = await getDocs(query(collection(db, 'rooms'), where('adminId', '==', admin.uid)));
       const rooms = roomsSnap.docs.map((roomDoc) => ({ id: roomDoc.id, ...roomDoc.data() }));
       const roomRows = [];
+      const dailyMap = new Map();
       const weeklyMap = new Map();
 
       for (const room of rooms) {
@@ -464,11 +482,13 @@ export default function AdminPortal() {
         const players = playersSnap.docs.map((playerDoc) => ({ id: playerDoc.id, ...playerDoc.data() }));
         const scans = scansSnap.docs.map((scanDoc) => ({ id: scanDoc.id, ...scanDoc.data() }));
         const roomDate = room.finishedAt || room.createdAt || room.updatedAt;
+        const dayKey = getDayKey(roomDate);
         const weekKey = getWeekKey(roomDate);
         const avgScore = average(players.map((player) => player.score));
 
         roomRows.push({
           roomCode: room.id,
+          dayKey,
           weekKey,
           createdAt: toDate(roomDate),
           playerCount: players.length,
@@ -476,6 +496,24 @@ export default function AdminPortal() {
           avgScore,
           topFood: getTopFoodName(scans),
         });
+
+        if (!dailyMap.has(dayKey)) {
+          dailyMap.set(dayKey, {
+            dayKey,
+            roomCount: 0,
+            playerCount: 0,
+            scanCount: 0,
+            scores: [],
+            scans: [],
+          });
+        }
+
+        const daily = dailyMap.get(dayKey);
+        daily.roomCount += 1;
+        daily.playerCount += players.length;
+        daily.scanCount += scans.length;
+        daily.scores.push(...players.map((player) => Number(player.score || 0)));
+        daily.scans.push(...scans);
 
         if (!weeklyMap.has(weekKey)) {
           weeklyMap.set(weekKey, {
@@ -496,6 +534,14 @@ export default function AdminPortal() {
         weekly.scans.push(...scans);
       }
 
+      const dailyRows = Array.from(dailyMap.values())
+        .map((row) => ({
+          ...row,
+          avgScore: average(row.scores),
+          topFood: getTopFoodName(row.scans),
+        }))
+        .sort((a, b) => b.dayKey.localeCompare(a.dayKey));
+
       const weeklyRows = Array.from(weeklyMap.values())
         .map((row) => ({
           ...row,
@@ -505,6 +551,7 @@ export default function AdminPortal() {
         .sort((a, b) => b.weekKey.localeCompare(a.weekKey));
 
       setReportData({
+        dailyRows,
         weeklyRows,
         roomRows: roomRows.sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0)),
         totalPlayers: roomRows.reduce((sum, room) => sum + room.playerCount, 0),
@@ -512,6 +559,61 @@ export default function AdminPortal() {
       });
     } catch (error) {
       setReportError(`โหลดรายงานไม่ได้: ${error.message}`);
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
+  const handleDeleteRoom = async (roomCode) => {
+    if (!admin || !roomCode) return;
+
+    const confirmed = window.confirm(
+      `ต้องการลบข้อมูลห้อง ${roomCode} ใช่ไหม?\n\nระบบจะลบรายชื่อผู้เล่นและประวัติการสแกนของห้องนี้ทั้งหมด เพื่อไม่ให้นำไปคำนวณรายงานสรุป`,
+    );
+
+    if (!confirmed) return;
+
+    setReportLoading(true);
+    setReportError('');
+
+    try {
+      const roomRef = doc(db, 'rooms', roomCode);
+      const roomSnap = await getDoc(roomRef);
+
+      if (!roomSnap.exists()) {
+        setReportError('ไม่พบข้อมูลห้องที่ต้องการลบ');
+        return;
+      }
+
+      if (roomSnap.data()?.adminId !== admin.uid) {
+        setReportError('ลบไม่ได้: ห้องนี้ไม่ได้เป็นของ Admin คนนี้');
+        return;
+      }
+
+      const [playersSnap, scansSnap] = await Promise.all([
+        getDocs(collection(db, 'rooms', roomCode, 'players')),
+        getDocs(collection(db, 'rooms', roomCode, 'scans')),
+      ]);
+
+      const docsToDelete = [
+        ...playersSnap.docs.map((playerDoc) => playerDoc.ref),
+        ...scansSnap.docs.map((scanDoc) => scanDoc.ref),
+        roomRef,
+      ];
+
+      for (let index = 0; index < docsToDelete.length; index += 450) {
+        const batch = writeBatch(db);
+        docsToDelete.slice(index, index + 450).forEach((ref) => batch.delete(ref));
+        await batch.commit();
+      }
+
+      await loadReports();
+    } catch (error) {
+      setReportError(
+        error?.code === 'permission-denied'
+          ? 'ลบห้องไม่ได้: Firestore Rules ยังไม่อนุญาตให้ลบ scans/players ของห้อง กรุณาอัปเดต Rules แล้ว Publish'
+          : `ลบห้องไม่ได้: ${error.message}`,
+      );
     } finally {
       setReportLoading(false);
     }
@@ -530,24 +632,9 @@ export default function AdminPortal() {
       <div className="min-h-screen bg-[#071524] text-white flex items-center justify-center p-5">
         <div className="w-full max-w-5xl grid lg:grid-cols-[0.9fr_1.1fr] gap-6 items-center">
           <div className="text-center lg:text-left">
-            <div className="relative inline-block mb-6">
-              <div className="absolute inset-3 rounded-[2rem] bg-cyan-400/25 blur-2xl" />
-              <img
-                src={GAME_LOGO_URL}
-                alt="SFS-GAME"
-                className="relative w-60 mx-auto lg:mx-0 rounded-[2rem] border-4 border-white/15 bg-white/95 p-3 shadow-[0_24px_70px_rgba(34,211,238,0.32)]"
-              />
-            </div>
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-4 py-2 text-xs font-black uppercase tracking-[0.22em] text-cyan-200 shadow-lg shadow-cyan-950/20">
-              Admin Control Center
-            </div>
-            <h1 className="mb-4 text-4xl md:text-5xl font-black leading-tight text-transparent bg-clip-text bg-gradient-to-r from-cyan-200 via-lime-200 to-amber-200 drop-shadow-[0_8px_24px_rgba(34,211,238,0.28)]">
-              ระบบ Admin
-              <span className="block text-white drop-shadow-[0_8px_22px_rgba(255,255,255,0.16)]">
-                SFS-GAME
-              </span>
-            </h1>
-            <p className="text-slate-200 font-semibold leading-relaxed drop-shadow-sm">
+            <img src={GAME_LOGO_URL} alt="SFS-GAME" className="w-56 mx-auto lg:mx-0 mb-5" />
+            <h1 className="text-4xl font-black mb-4">ระบบ Admin SFS-GAME</h1>
+            <p className="text-slate-300 font-semibold leading-relaxed">
               สมัครสมาชิกเพื่อสร้างฐานข้อมูลอาหาร เครื่องดื่ม ขนม และไอศกรีมของตนเอง
               จากนั้นสร้างห้องเกมให้นักเรียนสแกนจากฐานข้อมูลของ Admin คนนั้นโดยเฉพาะ
             </p>
@@ -882,7 +969,7 @@ export default function AdminPortal() {
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div>
               <h2 className="text-2xl font-black flex items-center gap-2"><BarChart3 className="text-cyan-300" /> รายงานสรุปการเล่นเกม</h2>
-              <p className="text-slate-400 font-bold text-sm mt-1">คะแนนเฉลี่ยรายสัปดาห์, รายห้อง, จำนวนผู้เล่น และขนมที่เลือกบ่อย</p>
+              <p className="text-slate-400 font-bold text-sm mt-1">คะแนนเฉลี่ยรายวัน แยกกับรายสัปดาห์ รายห้อง จำนวนผู้เล่น และขนมที่เลือกบ่อย</p>
             </div>
             <button
               type="button"
@@ -911,6 +998,39 @@ export default function AdminPortal() {
               <div className="text-slate-400 font-bold text-sm">จำนวนห้องเกม</div>
             </div>
           </div>
+          <section className="bg-white/[0.07] border border-white/10 rounded-3xl overflow-hidden">
+            <div className="p-5 border-b border-white/10 font-black text-xl">สรุปรายวัน</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="text-xs uppercase tracking-widest text-cyan-300 bg-slate-950/40">
+                  <tr>
+                    <th className="p-4">วันที่</th>
+                    <th className="p-4 text-right">คะแนนเฉลี่ย</th>
+                    <th className="p-4 text-right">จำนวนห้อง</th>
+                    <th className="p-4 text-right">ผู้เล่น</th>
+                    <th className="p-4 text-right">สแกนทั้งหมด</th>
+                    <th className="p-4">ขนมที่เลือกบ่อย</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reportData.dailyRows.map((row) => (
+                    <tr key={row.dayKey} className="border-t border-white/10">
+                      <td className="p-4 font-black">{formatThaiDate(row.dayKey)}</td>
+                      <td className="p-4 text-right">{row.avgScore.toFixed(2)}</td>
+                      <td className="p-4 text-right">{row.roomCount}</td>
+                      <td className="p-4 text-right">{row.playerCount}</td>
+                      <td className="p-4 text-right">{row.scanCount}</td>
+                      <td className="p-4">{row.topFood}</td>
+                    </tr>
+                  ))}
+                  {reportData.dailyRows.length === 0 && (
+                    <tr><td colSpan="6" className="p-8 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลรายวัน</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
           <section className="bg-white/[0.07] border border-white/10 rounded-3xl overflow-hidden">
             <div className="p-5 border-b border-white/10 font-black text-xl">สรุปรายสัปดาห์</div>
             <div className="overflow-x-auto">
@@ -950,26 +1070,40 @@ export default function AdminPortal() {
                 <thead className="text-xs uppercase tracking-widest text-cyan-300 bg-slate-950/40">
                   <tr>
                     <th className="p-4">รหัสห้อง</th>
+                    <th className="p-4">วันที่</th>
                     <th className="p-4">สัปดาห์</th>
                     <th className="p-4 text-right">คะแนนเฉลี่ย</th>
                     <th className="p-4 text-right">ผู้เล่น</th>
                     <th className="p-4 text-right">สแกน</th>
                     <th className="p-4">ขนมที่เลือกบ่อย</th>
+                    <th className="p-4 text-right">จัดการ</th>
                   </tr>
                 </thead>
                 <tbody>
                   {reportData.roomRows.map((row) => (
                     <tr key={row.roomCode} className="border-t border-white/10">
                       <td className="p-4 font-mono text-cyan-100">{row.roomCode}</td>
+                      <td className="p-4">{formatThaiDate(row.createdAt)}</td>
                       <td className="p-4">{row.weekKey}</td>
                       <td className="p-4 text-right">{row.avgScore.toFixed(2)}</td>
                       <td className="p-4 text-right">{row.playerCount}</td>
                       <td className="p-4 text-right">{row.scanCount}</td>
                       <td className="p-4">{row.topFood}</td>
+                      <td className="p-4 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteRoom(row.roomCode)}
+                          disabled={reportLoading}
+                          className="inline-flex items-center gap-2 rounded-xl bg-rose-500/15 px-3 py-2 font-black text-rose-200 hover:bg-rose-500/25 disabled:opacity-50"
+                          title="ลบห้องทดสอบออกจากรายงาน"
+                        >
+                          <Trash2 size={16} /> ลบห้อง
+                        </button>
+                      </td>
                     </tr>
                   ))}
                   {reportData.roomRows.length === 0 && (
-                    <tr><td colSpan="6" className="p-8 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลห้องเกม</td></tr>
+                    <tr><td colSpan="8" className="p-8 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลห้องเกม</td></tr>
                   )}
                 </tbody>
               </table>
