@@ -51,6 +51,148 @@ const HERO_AVATARS = [
 
 const SCAN_COOLDOWN_MS = 1400;
 
+const OVERALL_LEVELS = [
+  {
+    min: 4.5,
+    max: 5,
+    icon: '🟢',
+    colorName: 'สีเขียว ปลอดภัยมาก',
+    title: 'สุดยอดสายลับระดับตำนาน',
+    titleEn: 'Legendary Agent',
+    badgeClass: 'from-emerald-400 to-green-600',
+    borderClass: 'border-emerald-400/70',
+    textClass: 'text-emerald-300',
+    note: 'เลือกได้ดีมาก รู้ทันหวาน มัน เค็ม และเหมาะเป็นต้นแบบให้เพื่อน ๆ',
+  },
+  {
+    min: 3.5,
+    max: 4.49,
+    icon: '🟡',
+    colorName: 'สีเหลือง ควรระวังบางชิ้น',
+    title: 'สายลับมือโปร',
+    titleEn: 'Professional Agent',
+    badgeClass: 'from-yellow-300 to-amber-500',
+    borderClass: 'border-yellow-400/70',
+    textClass: 'text-yellow-300',
+    note: 'เลือกได้ดี แต่ยังมีบางชิ้นที่ควรอ่านฉลากให้ละเอียดขึ้นอีกนิด',
+  },
+  {
+    min: 2.5,
+    max: 3.49,
+    icon: '🟠',
+    colorName: 'สีส้ม เสี่ยงสะสม',
+    title: 'สายลับฝึกหัด',
+    titleEn: 'Trainee Agent',
+    badgeClass: 'from-orange-400 to-orange-600',
+    borderClass: 'border-orange-400/70',
+    textClass: 'text-orange-300',
+    note: 'เริ่มจับสัญญาณได้แล้ว แต่ควรลดกลุ่มหวาน มัน เค็มลงอีก',
+  },
+  {
+    min: 0,
+    max: 2.49,
+    icon: '🔴',
+    colorName: 'สีแดง อันตรายขั้นวิกฤต',
+    title: 'สายลับติดกับดัก',
+    titleEn: 'Agent in Danger!',
+    badgeClass: 'from-rose-500 to-red-700',
+    borderClass: 'border-rose-400/70',
+    textClass: 'text-rose-300',
+    note: 'ต้องระวังมากเป็นพิเศษ ลองเลือกชิ้นที่น้ำตาล ไขมัน และโซเดียมน้อยลง',
+  },
+];
+
+const SPEED_LEVELS = [
+  {
+    maxAvgSeconds: 15,
+    bonus: 0.05,
+    icon: '⚡',
+    title: 'สายฟ้าแลบ',
+    titleEn: 'Lightning Agent',
+    note: 'เร็วมากและยังเลือกได้ครบตามภารกิจ',
+  },
+  {
+    maxAvgSeconds: 30,
+    bonus: 0.03,
+    icon: '🚀',
+    title: 'มือไวระดับโปร',
+    titleEn: 'Swift Agent',
+    note: 'ทำภารกิจได้รวดเร็วและมั่นใจ',
+  },
+  {
+    maxAvgSeconds: 45,
+    bonus: 0.01,
+    icon: '🕵️',
+    title: 'นักสืบใจเย็น',
+    titleEn: 'Steady Agent',
+    note: 'ใช้เวลาเหมาะสม อ่านข้อมูลก่อนตัดสินใจ',
+  },
+  {
+    maxAvgSeconds: Infinity,
+    bonus: 0,
+    icon: '🧭',
+    title: 'นักสำรวจรอบคอบ',
+    titleEn: 'Careful Agent',
+    note: 'ค่อย ๆ เลือกอย่างรอบคอบ ยังไม่มีโบนัสความเร็ว',
+  },
+];
+
+const getOverallLevel = (averageScore = 0) => {
+  const scoreValue = Number(averageScore || 0);
+  return OVERALL_LEVELS.find((level) => scoreValue >= level.min && scoreValue <= level.max) || OVERALL_LEVELS[OVERALL_LEVELS.length - 1];
+};
+
+const getSpeedLevel = (timeUsed = 0, itemsScanned = 0, missionCompleted = false) => {
+  if (!missionCompleted || !itemsScanned) {
+    return {
+      icon: '⏳',
+      title: 'ยังไม่ครบภารกิจ',
+      titleEn: 'Mission Not Complete',
+      bonus: 0,
+      avgSeconds: itemsScanned ? Number(timeUsed || 0) / itemsScanned : 0,
+      note: 'ต้องสแกนครบตามจำนวนที่ครูกำหนดก่อน จึงจะได้รับระดับความเร็ว',
+    };
+  }
+
+  const avgSeconds = Number(timeUsed || 0) / itemsScanned;
+  const matched = SPEED_LEVELS.find((level) => avgSeconds <= level.maxAvgSeconds) || SPEED_LEVELS[SPEED_LEVELS.length - 1];
+
+  return {
+    ...matched,
+    avgSeconds,
+  };
+};
+
+const buildPlayerScore = ({ scoreSum = 0, itemsScanned = 0, itemLimit = 5, timeUsed = 0 }) => {
+  const targetItems = Math.max(1, Number(itemLimit || 5));
+  const scanCount = Math.max(0, Number(itemsScanned || 0));
+  const totalScore = Number(scoreSum || 0);
+  const averageScore = scanCount > 0 ? totalScore / scanCount : 0;
+  const completionRate = Math.min(scanCount / targetItems, 1);
+  const missionCompleted = scanCount >= targetItems;
+  const speedLevel = getSpeedLevel(timeUsed, scanCount, missionCompleted);
+  const speedBonus = missionCompleted ? Number(speedLevel.bonus || 0) : 0;
+
+  // คะแนนจัดลำดับ: คนที่สแกนครบต้องอยู่เหนือคนที่ไม่ครบเสมอ
+  // ผู้ที่ยังไม่ครบจะถูกถ่วงคะแนนด้วยอัตราความครบถ้วนและตัวคูณ 0.19 เพื่อไม่ให้ชนะผู้เล่นที่ทำภารกิจครบ
+  const rankingScore = missionCompleted
+    ? averageScore + speedBonus
+    : averageScore * completionRate * 0.19;
+
+  return {
+    targetItems,
+    scoreSum: totalScore,
+    itemsScanned: scanCount,
+    averageScore,
+    completionRate,
+    missionCompleted,
+    speedLevel,
+    speedBonus,
+    rankingScore,
+    overallLevel: getOverallLevel(averageScore),
+  };
+};
+
 const getStars = (val, thresholds) => {
   if (val <= thresholds[0]) return 5;
   if (val <= thresholds[1]) return 4;
@@ -138,6 +280,15 @@ const safeDocId = (value) =>
     .replace(/[.#$/[\]]/g, '_')
     .replace(/\s+/g, '_')
     .slice(0, 80) || `player_${Date.now()}`;
+
+const createPlayerSessionId = (name) => {
+  const baseName = safeDocId(name || 'player');
+  const randomPart =
+    globalThis.crypto?.randomUUID?.().replace(/-/g, '').slice(0, 10) ||
+    Math.random().toString(36).slice(2, 12);
+
+  return `${baseName}_${Date.now()}_${randomPart}`.slice(0, 160);
+};
 
 const normalizeFoodDoc = (rawFood, barcode) => {
   const sugar = Number(rawFood.sugar ?? rawFood.sugarGram ?? rawFood.sugar_g ?? 0);
@@ -738,8 +889,16 @@ export default function GameMain() {
     newItemsCount,
     finalScoreToSave,
     earnedBonus,
+    itemLimit,
+    timeUsed,
   }) {
     const playerRef = doc(db, 'rooms', currentRoomCode, 'players', playerDocId);
+    const savedScorePackage = buildPlayerScore({
+      scoreSum: newTotalScore,
+      itemsScanned: newItemsCount,
+      itemLimit,
+      timeUsed,
+    });
     const scanRef = doc(db, 'rooms', currentRoomCode, 'scans', `${playerDocId}_${food.barcode}`);
 
     await runTransaction(db, async (transaction) => {
@@ -758,15 +917,29 @@ export default function GameMain() {
         playerRef,
         {
           name: playerName,
+          playerKey: safeDocId(playerName),
+          sessionId: playerDocId,
           avatar: playerInfo.avatar?.icon || '',
-          score: Number(finalScoreToSave.toFixed(3)),
-          scoreSum: Number(newTotalScore.toFixed(3)),
-          averageScore: Number((newTotalScore / newItemsCount).toFixed(3)),
-          speedBonus: Number(earnedBonus.toFixed(3)),
-          itemsScanned: newItemsCount,
+          score: Number(savedScorePackage.rankingScore.toFixed(3)),
+          rankingScore: Number(savedScorePackage.rankingScore.toFixed(3)),
+          scoreSum: Number(savedScorePackage.scoreSum.toFixed(3)),
+          averageScore: Number(savedScorePackage.averageScore.toFixed(3)),
+          speedBonus: Number(savedScorePackage.speedBonus.toFixed(3)),
+          completionRate: Number(savedScorePackage.completionRate.toFixed(3)),
+          missionCompleted: savedScorePackage.missionCompleted,
+          targetItems: savedScorePackage.targetItems,
+          itemsScanned: savedScorePackage.itemsScanned,
+          overallLevelTitle: savedScorePackage.overallLevel.title,
+          overallLevelTitleEn: savedScorePackage.overallLevel.titleEn,
+          overallLevelColor: savedScorePackage.overallLevel.colorName,
+          speedLevelTitle: savedScorePackage.speedLevel.title,
+          speedLevelTitleEn: savedScorePackage.speedLevel.titleEn,
+          speedAvgSeconds: Number((savedScorePackage.speedLevel.avgSeconds || 0).toFixed(2)),
           scannedBarcodes: arrayUnion(food.barcode),
           lastBarcode: food.barcode,
           lastFoodName: food.name,
+          lastFoodStars: Number(details.avgStars.toFixed(3)),
+          lastScanOrder: newItemsCount,
           updatedAt: serverTimestamp(),
         },
         { merge: true },
@@ -774,9 +947,12 @@ export default function GameMain() {
 
       transaction.set(scanRef, {
         playerId: playerDocId,
+        sessionId: playerDocId,
+        playerKey: safeDocId(playerName),
         playerName,
         barcode: food.barcode,
         uniqueScanKey: `${playerDocId}_${food.barcode}`,
+        scanOrder: newItemsCount,
         foodId: food.id,
         foodName: food.name,
         category: food.category,
@@ -789,6 +965,14 @@ export default function GameMain() {
         saltStars: details.saltStars,
         avgStars: Number(details.avgStars.toFixed(3)),
         statusLabel: details.status.label,
+        scoreSumAfterScan: Number(savedScorePackage.scoreSum.toFixed(3)),
+        averageScoreAfterScan: Number(savedScorePackage.averageScore.toFixed(3)),
+        rankingScoreAfterScan: Number(savedScorePackage.rankingScore.toFixed(3)),
+        completionRateAfterScan: Number(savedScorePackage.completionRate.toFixed(3)),
+        missionCompletedAfterScan: savedScorePackage.missionCompleted,
+        speedBonusAfterScan: Number(savedScorePackage.speedBonus.toFixed(3)),
+        timeUsedAtScan: Number(timeUsed || 0),
+        targetItems: savedScorePackage.targetItems,
         createdAt: serverTimestamp(),
       });
     });
@@ -913,21 +1097,14 @@ export default function GameMain() {
       const details = calcItemDetails(scannedFood);
       const newTotalScore = curScoreSum + details.avgStars;
       const newItemsCount = curScannedItems + 1;
-      const currentAvg = newTotalScore / newItemsCount;
-
-      let finalScoreToSave = currentAvg;
-      let earnedBonus = 0;
-
-      if (newItemsCount >= itemLimit) {
-        const avgTime = curTimeUsed / newItemsCount;
-
-        if (avgTime <= 15) earnedBonus = 0.05;
-        else if (avgTime <= 30) earnedBonus = 0.03;
-        else if (avgTime <= 45) earnedBonus = 0.01;
-        else earnedBonus = 0;
-
-        finalScoreToSave = currentAvg + earnedBonus;
-      }
+      const scorePackage = buildPlayerScore({
+        scoreSum: newTotalScore,
+        itemsScanned: newItemsCount,
+        itemLimit,
+        timeUsed: curTimeUsed,
+      });
+      const finalScoreToSave = scorePackage.rankingScore;
+      const earnedBonus = scorePackage.speedBonus;
 
       await saveScanToFirebase({
         roomCode: curRoomCode,
@@ -939,6 +1116,8 @@ export default function GameMain() {
         newItemsCount,
         finalScoreToSave,
         earnedBonus,
+        itemLimit,
+        timeUsed: curTimeUsed,
       });
 
       setScoreSum(newTotalScore);
@@ -1002,21 +1181,37 @@ export default function GameMain() {
   const handleStartWait = async (e) => {
     e.preventDefault();
 
-    if (!playerInfo.avatar || !playerInfo.name.trim()) {
+    const playerName = playerInfo.name.trim();
+    if (!playerInfo.avatar || !playerName) {
       alert('กรุณาเลือกฮีโร่และตั้งชื่อ!');
       return;
     }
 
-    const nextPlayerId = safeDocId(playerInfo.name);
+    const playerKey = safeDocId(playerName);
+    const nextPlayerId = createPlayerSessionId(playerName);
+    const targetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
+    const timeLimitSeconds = getRoomTimeLimitSeconds(roomData);
+
     setPlayerId(nextPlayerId);
     finishRequestedRef.current = false;
 
     await setDoc(doc(db, 'rooms', roomCode, 'players', nextPlayerId), {
-      name: playerInfo.name.trim(),
+      name: playerName,
+      playerKey,
+      sessionId: nextPlayerId,
+      roomCode,
+      schoolName: getRoomSchoolName(roomData),
       avatar: playerInfo.avatar.icon,
+      avatarName: playerInfo.avatar.name,
       score: 0,
+      rankingScore: 0,
       scoreSum: 0,
+      averageScore: 0,
       speedBonus: 0,
+      completionRate: 0,
+      missionCompleted: false,
+      targetItems,
+      timeLimitSeconds,
       itemsScanned: 0,
       scannedBarcodes: [],
       joinedAt: serverTimestamp(),
@@ -1031,6 +1226,49 @@ export default function GameMain() {
     scannedBarcodeSetRef.current = new Set();
     setStep('waiting');
   };
+
+  useEffect(() => {
+    if (step !== 'summary' || !roomCode || !playerId) return;
+
+    const targetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
+    const finalScorePackage = buildPlayerScore({
+      scoreSum,
+      itemsScanned: scannedItems,
+      itemLimit: targetItems,
+      timeUsed,
+    });
+
+    setDoc(
+      doc(db, 'rooms', roomCode, 'players', playerId),
+      {
+        name: playerInfo.name.trim(),
+        playerKey: safeDocId(playerInfo.name),
+        sessionId: playerId,
+        roomCode,
+        schoolName: getRoomSchoolName(roomData),
+        score: Number(finalScorePackage.rankingScore.toFixed(3)),
+        rankingScore: Number(finalScorePackage.rankingScore.toFixed(3)),
+        scoreSum: Number(finalScorePackage.scoreSum.toFixed(3)),
+        averageScore: Number(finalScorePackage.averageScore.toFixed(3)),
+        speedBonus: Number(finalScorePackage.speedBonus.toFixed(3)),
+        completionRate: Number(finalScorePackage.completionRate.toFixed(3)),
+        missionCompleted: finalScorePackage.missionCompleted,
+        targetItems: finalScorePackage.targetItems,
+        itemsScanned: finalScorePackage.itemsScanned,
+        overallLevelTitle: finalScorePackage.overallLevel.title,
+        overallLevelTitleEn: finalScorePackage.overallLevel.titleEn,
+        overallLevelColor: finalScorePackage.overallLevel.colorName,
+        speedLevelTitle: finalScorePackage.speedLevel.title,
+        speedLevelTitleEn: finalScorePackage.speedLevel.titleEn,
+        speedAvgSeconds: Number((finalScorePackage.speedLevel.avgSeconds || 0).toFixed(2)),
+        finishedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    ).catch((err) => {
+      console.warn('Unable to save final player summary:', err);
+    });
+  }, [step, roomCode, playerId, roomData, playerInfo.name, scoreSum, scannedItems, timeUsed]);
 
   const handleManualScanSubmit = async (e) => {
     e.preventDefault();
@@ -1053,6 +1291,17 @@ export default function GameMain() {
     const s = (seconds % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
   };
+
+  const targetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
+  const summaryScore = buildPlayerScore({
+    scoreSum,
+    itemsScanned: scannedItems,
+    itemLimit: targetItems,
+    timeUsed,
+  });
+  const summaryLevel = summaryScore.overallLevel;
+  const summarySpeedLevel = summaryScore.speedLevel;
+  const completionPercent = Math.round(summaryScore.completionRate * 100);
 
   return (
     <div className="min-h-screen bg-[#0a192f] text-white font-sans relative overflow-hidden flex flex-col">
@@ -1399,37 +1648,145 @@ export default function GameMain() {
         )}
 
         {step === 'summary' && (
-          <div className="w-full max-w-lg text-center animate-in zoom-in duration-500">
+          <div className="w-full max-w-3xl text-center animate-in zoom-in duration-500">
             <Trophy className="w-24 h-24 text-amber-400 mx-auto mb-6 drop-shadow-[0_0_20px_rgba(245,158,11,0.6)]" />
-            <h1 className="text-5xl font-black text-amber-400 uppercase tracking-widest mb-2">จบภารกิจ</h1>
+            <h1 className="text-4xl md:text-5xl font-black text-amber-400 uppercase tracking-widest mb-2">
+              จบภารกิจ
+            </h1>
             {getRoomSchoolName(roomData) && (
               <div className="mt-3 inline-flex rounded-full border border-lime-300/30 bg-lime-300/10 px-5 py-2 text-sm font-black text-lime-200">
                 ผลภารกิจของ {getRoomSchoolName(roomData)}
               </div>
             )}
 
-            <div className="bg-[#112240]/90 border-2 border-cyan-500/50 rounded-3xl p-8 my-8 shadow-[0_0_30px_rgba(6,182,212,0.2)]">
-              <div className="text-sm font-black text-cyan-400 uppercase tracking-widest mb-2">
-                คะแนนรวมจัดลำดับ
-              </div>
-              <div className="text-6xl font-black text-white mb-2">{score.toFixed(3)}</div>
-              <div className="text-sm font-bold text-amber-400 mb-6 bg-amber-500/10 inline-block px-4 py-1 rounded-full border border-amber-500/30">
-                + โบนัสความเร็ว: {speedBonus > 0 ? speedBonus.toFixed(3) : '0.000'}
+            <div className="bg-[#112240]/90 border-2 border-cyan-500/50 rounded-[2rem] p-6 md:p-8 my-8 shadow-[0_0_30px_rgba(6,182,212,0.2)] text-left">
+              <div className="flex flex-col md:flex-row items-center gap-5 text-center md:text-left mb-6">
+                <div className="w-24 h-24 rounded-full bg-blue-900/60 border-4 border-cyan-400/50 flex items-center justify-center text-6xl shadow-[0_0_25px_rgba(6,182,212,0.25)]">
+                  {playerInfo.avatar?.icon || '🕵️'}
+                </div>
+                <div className="flex-1">
+                  <div className="text-xs font-black text-cyan-300 uppercase tracking-[0.25em] mb-1">
+                    Agent Name
+                  </div>
+                  <h2 className="text-3xl font-black text-white">{playerInfo.name || 'สายลับ'}</h2>
+                  <p className="text-sm font-bold text-slate-400 mt-1">
+                    รหัสรอบการเล่น: <span className="text-slate-200">{playerId || '-'}</span>
+                  </p>
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 text-left border-t border-cyan-900/50 pt-6">
-                <div className="bg-[#0a192f] p-4 rounded-2xl">
+              {!summaryScore.missionCompleted && (
+                <div className="mb-6 rounded-2xl border border-amber-400/50 bg-amber-500/10 p-4 text-center text-amber-200 font-bold">
+                  ⚠️ ยังสแกนไม่ครบตามโจทย์ คะแนนจัดอันดับจึงถูกถ่วงน้ำหนัก เพื่อให้ผู้ที่ทำภารกิจครบได้เปรียบตามกติกา
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                <div className="bg-[#0a192f] p-4 rounded-2xl border border-slate-700">
                   <div className="text-xs text-slate-400 uppercase tracking-widest">สแกนสำเร็จ</div>
-                  <div className="text-2xl font-black mt-1">
-                    {scannedItems} <span className="text-sm font-normal text-slate-500">ชิ้น</span>
+                  <div className="text-2xl font-black mt-1 text-white">
+                    {summaryScore.itemsScanned}/{summaryScore.targetItems}
+                    <span className="text-sm font-normal text-slate-500"> ชิ้น</span>
                   </div>
                 </div>
-
-                <div className="bg-[#0a192f] p-4 rounded-2xl">
+                <div className="bg-[#0a192f] p-4 rounded-2xl border border-slate-700">
+                  <div className="text-xs text-slate-400 uppercase tracking-widest">ความครบถ้วน</div>
+                  <div className="text-2xl font-black mt-1 text-cyan-300">{completionPercent}%</div>
+                </div>
+                <div className="bg-[#0a192f] p-4 rounded-2xl border border-slate-700">
                   <div className="text-xs text-slate-400 uppercase tracking-widest">เวลาที่ใช้</div>
-                  <div className="text-2xl font-black mt-1">
-                    {formatTime(timeUsed)} <span className="text-sm font-normal text-slate-500">นาที</span>
+                  <div className="text-2xl font-black mt-1 text-white">{formatTime(timeUsed)}</div>
+                </div>
+                <div className="bg-[#0a192f] p-4 rounded-2xl border border-slate-700">
+                  <div className="text-xs text-slate-400 uppercase tracking-widest">เฉลี่ย/ชิ้น</div>
+                  <div className="text-2xl font-black mt-1 text-white">
+                    {summarySpeedLevel.avgSeconds ? summarySpeedLevel.avgSeconds.toFixed(1) : '0.0'}
+                    <span className="text-sm font-normal text-slate-500"> วิ</span>
                   </div>
+                </div>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-4 mb-6">
+                <div className={`rounded-3xl border-2 ${summaryLevel.borderClass} bg-[#0a192f] p-5`}>
+                  <div className="text-xs font-black text-slate-400 uppercase tracking-[0.25em] mb-2">
+                    คะแนนภาพรวม
+                  </div>
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="text-5xl font-black text-white">
+                      {summaryScore.averageScore.toFixed(2)}
+                      <span className="text-lg text-slate-500">/5</span>
+                    </div>
+                    <div className={`rounded-2xl bg-gradient-to-r ${summaryLevel.badgeClass} px-4 py-3 text-3xl shadow-lg`}>
+                      {summaryLevel.icon}
+                    </div>
+                  </div>
+                  <h3 className={`text-2xl font-black ${summaryLevel.textClass}`}>{summaryLevel.title}</h3>
+                  <div className="text-sm font-black text-white mt-1">({summaryLevel.titleEn})</div>
+                  <div className="mt-3 text-sm font-bold text-slate-300">{summaryLevel.colorName}</div>
+                  <p className="mt-3 text-sm leading-relaxed text-slate-300">{summaryLevel.note}</p>
+                </div>
+
+                <div className="rounded-3xl border-2 border-amber-400/60 bg-[#0a192f] p-5">
+                  <div className="text-xs font-black text-slate-400 uppercase tracking-[0.25em] mb-2">
+                    ระดับความเร็ว
+                  </div>
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="text-5xl font-black text-white">
+                      {summarySpeedLevel.icon}
+                    </div>
+                    <div className="rounded-2xl bg-amber-500/10 border border-amber-400/40 px-4 py-2 text-right">
+                      <div className="text-xs text-amber-200 font-black">โบนัส</div>
+                      <div className="text-2xl text-amber-300 font-black">
+                        +{Number(summaryScore.speedBonus || 0).toFixed(3)}
+                      </div>
+                    </div>
+                  </div>
+                  <h3 className="text-2xl font-black text-amber-300">{summarySpeedLevel.title}</h3>
+                  <div className="text-sm font-black text-white mt-1">({summarySpeedLevel.titleEn})</div>
+                  <p className="mt-3 text-sm leading-relaxed text-slate-300">{summarySpeedLevel.note}</p>
+                </div>
+              </div>
+
+              <div className="rounded-3xl bg-gradient-to-r from-cyan-500/20 to-blue-600/20 border border-cyan-400/40 p-5 text-center mb-6">
+                <div className="text-sm font-black text-cyan-200 uppercase tracking-[0.25em] mb-2">
+                  คะแนนจัดอันดับ Leaderboard
+                </div>
+                <div className="text-6xl font-black text-white mb-2">
+                  {summaryScore.rankingScore.toFixed(3)}
+                </div>
+                <div className="text-sm font-bold text-slate-300">
+                  {summaryScore.missionCompleted
+                    ? 'สแกนครบแล้ว ใช้คะแนนเฉลี่ยรวมกับโบนัสความเร็วในการจัดอันดับ'
+                    : 'ยังไม่ครบภารกิจ ระบบถ่วงคะแนนตามจำนวนชิ้นที่สแกนได้'}
+                </div>
+              </div>
+
+              <div className="rounded-3xl bg-[#0a192f] border border-slate-700 p-5">
+                <h3 className="text-lg font-black text-cyan-300 mb-4 text-center">
+                  เกณฑ์ผลสรุปคะแนนภาพรวม
+                </h3>
+                <div className="space-y-2">
+                  {OVERALL_LEVELS.map((level) => (
+                    <div
+                      key={level.titleEn}
+                      className="grid grid-cols-[6rem_1fr] md:grid-cols-[7rem_1fr_12rem] gap-3 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-sm"
+                    >
+                      <div className="font-black text-white">
+                        {level.min === 0
+                          ? 'ต่ำกว่า 2.5'
+                          : level.min === 4.5
+                            ? '4.5-5.0'
+                            : level.min === 3.5
+                              ? '3.5-4.4'
+                              : '2.5-3.4'}
+                      </div>
+                      <div>
+                        <div className="font-black text-white">{level.title}</div>
+                        <div className="font-bold text-slate-400">({level.titleEn})</div>
+                      </div>
+                      <div className="hidden md:block font-bold text-slate-300">{level.icon} {level.colorName}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
