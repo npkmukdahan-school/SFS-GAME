@@ -40,7 +40,7 @@ import {
 import { auth, db } from '../firebase';
 
 const PUBLIC_BASE_URL = import.meta.env.BASE_URL || '/';
-const GAME_LOGO_URL = `${PUBLIC_BASE_URL}sfs-game-logo.png`;
+const GAME_LOGO_URL = `${PUBLIC_BASE_URL}sfs_logo.png`;
 
 const emptyFoodForm = {
   barcode: '',
