@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 
 const PUBLIC_BASE_URL = import.meta.env.BASE_URL || '/';
-const GAME_LOGO_URL = `${PUBLIC_BASE_URL}sfs-game-logo.png`;
+const GAME_LOGO_URL = `${PUBLIC_BASE_URL}sfs_logo.png`;
 const GDA_BANNER_URL = `${PUBLIC_BASE_URL}gda-healthy-banner.png`;
 const SCORE_CRITERIA_BANNER_URL = `${PUBLIC_BASE_URL}score-criteria-banner.png`;
 
