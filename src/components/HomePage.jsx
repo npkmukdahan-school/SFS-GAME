@@ -20,7 +20,20 @@ import {
 const PUBLIC_BASE_URL = import.meta.env.BASE_URL || '/';
 const GAME_LOGO_URL = `${PUBLIC_BASE_URL}sfs-game-logo.png`;
 const GDA_BANNER_URL = `${PUBLIC_BASE_URL}gda-healthy-banner.png`;
-const KNOWLEDGE_PDF_URL = 'https://phan.moph.go.th/kanya/download/page02/16.pdf';
+const SCORE_CRITERIA_BANNER_URL = `${PUBLIC_BASE_URL}score-criteria-banner.png`;
+
+const KNOWLEDGE_LINKS = [
+  {
+    title: 'ใบความรู้ที่ 1',
+    subtitle: 'เอกสารประกอบกิจกรรม',
+    url: 'https://drive.google.com/file/d/1wDKVBtkIqsdO5GH6zu7AF_Eo_e7f5pwh/view?usp=sharing',
+  },
+  {
+    title: 'ใบความรู้ที่ 2',
+    subtitle: 'เอกสารเพิ่มเติม',
+    url: 'https://drive.google.com/file/d/1mXO5u-LG2MJ-qxFFOFYF-W-oDrmAUV5h/view?usp=sharing',
+  },
+];
 
 const learningSteps = [
   {
@@ -76,6 +89,12 @@ const heroSlides = [
     label: 'เช็ก GDA',
     imageClass: 'object-contain bg-white',
   },
+  {
+    src: SCORE_CRITERIA_BANNER_URL,
+    alt: 'เกณฑ์การคำนวณคะแนนเกมลับ จับหวาน มัน เค็ม',
+    label: 'เกณฑ์คะแนน',
+    imageClass: 'object-contain bg-white',
+  },
 ];
 
 export default function HomePage() {
@@ -84,10 +103,10 @@ export default function HomePage() {
   useEffect(() => {
     const slideTimer = window.setInterval(() => {
       setActiveSlide((prev) => (prev + 1) % heroSlides.length);
-    }, 4200);
+    }, 4500);
 
     return () => window.clearInterval(slideTimer);
-  }, [heroSlides.length]);
+  }, []);
 
   return (
     <div className="min-h-screen bg-white text-slate-900 overflow-hidden">
@@ -117,12 +136,7 @@ export default function HomePage() {
           <a href="#mission" className="px-4 py-2 rounded-full bg-lime-100 text-lime-700 border border-lime-200 hover:bg-lime-200">
             ภารกิจ
           </a>
-          <a
-            href={KNOWLEDGE_PDF_URL}
-            target="_blank"
-            rel="noreferrer"
-            className="px-4 py-2 rounded-full bg-amber-100 text-amber-700 border border-amber-200 hover:bg-amber-200"
-          >
+          <a href="#knowledge" className="px-4 py-2 rounded-full bg-amber-100 text-amber-700 border border-amber-200 hover:bg-amber-200">
             ใบความรู้
           </a>
           <Link to="/admin" className="px-4 py-2 rounded-full bg-fuchsia-500 text-white shadow-lg shadow-fuchsia-200 hover:bg-fuchsia-600">
@@ -165,12 +179,10 @@ export default function HomePage() {
                 <Users /> สร้างห้องเรียน
               </Link>
               <a
-                href={KNOWLEDGE_PDF_URL}
-                target="_blank"
-                rel="noreferrer"
+                href="#knowledge"
                 className="inline-flex items-center justify-center gap-2 bg-white border-2 border-amber-200 text-amber-700 font-black px-7 py-4 rounded-2xl shadow-md hover:bg-amber-50 transition"
               >
-                <FileText /> ใบความรู้
+                <FileText /> ใบความรู้ 2 ชุด
               </a>
             </div>
 
@@ -187,7 +199,7 @@ export default function HomePage() {
           <div className="relative min-h-[420px]">
             <div className="absolute inset-x-8 top-16 bottom-8 rounded-[2rem] bg-gradient-to-br from-cyan-100 via-white to-lime-100 shadow-2xl border border-white" />
 
-            <div className="relative mx-auto max-w-[520px] rounded-[2.25rem] bg-white border-4 border-white shadow-2xl overflow-hidden">
+            <div className="relative mx-auto max-w-[560px] rounded-[2.25rem] bg-white border-4 border-white shadow-2xl overflow-hidden">
               <div className="bg-gradient-to-r from-cyan-400 via-lime-300 to-amber-300 px-5 py-4 flex items-center justify-between">
                 <div className="font-black text-slate-950 flex items-center gap-2">
                   <QrCode size={22} /> SFS Mission
@@ -199,12 +211,12 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <div className="p-6">
+              <div className="p-5 md:p-6">
                 <div className="relative">
                   <img
                     src={heroSlides[activeSlide].src}
                     alt={heroSlides[activeSlide].alt}
-                    className={`w-full h-[280px] rounded-[2rem] border-4 border-white shadow-lg transition-all duration-500 ${heroSlides[activeSlide].imageClass}`}
+                    className={`w-full h-[280px] md:h-[320px] rounded-[2rem] border-4 border-white shadow-lg transition-all duration-500 ${heroSlides[activeSlide].imageClass}`}
                   />
                   <div className="absolute -bottom-4 left-4 flex items-center gap-2 rounded-2xl bg-white/95 px-3 py-2 shadow-lg border border-cyan-100">
                     <img
@@ -221,7 +233,7 @@ export default function HomePage() {
                   </div>
                 </div>
 
-                <div className="mt-7 flex items-center justify-center gap-2">
+                <div className="mt-7 flex flex-wrap items-center justify-center gap-2">
                   {heroSlides.map((slide, index) => (
                     <button
                       key={slide.label}
@@ -233,6 +245,7 @@ export default function HomePage() {
                           : 'w-3 bg-slate-300 hover:bg-slate-400'
                       }`}
                       aria-label={`แสดงภาพ ${slide.label}`}
+                      title={slide.label}
                     />
                   ))}
                 </div>
@@ -289,23 +302,48 @@ export default function HomePage() {
             })}
           </div>
 
-          <div className="mt-6 bg-gradient-to-r from-amber-50 to-lime-50 border border-amber-100 rounded-3xl p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4 shadow-sm">
-            <div>
-              <h3 className="text-xl font-black flex items-center gap-2 text-slate-950">
-                <FileText className="text-amber-500" /> ใบความรู้ประกอบกิจกรรม
-              </h3>
-              <p className="text-slate-600 font-semibold mt-2">
-                ใช้อ่านก่อนเริ่มเกม เพื่อทบทวนความรู้เรื่องการเลือกบริโภคและข้อมูลบนฉลากอาหาร
-              </p>
+          <div id="knowledge" className="mt-6 bg-gradient-to-r from-amber-50 to-lime-50 border border-amber-100 rounded-3xl p-5 shadow-sm">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div>
+                <h3 className="text-xl font-black flex items-center gap-2 text-slate-950">
+                  <FileText className="text-amber-500" /> ใบความรู้ประกอบกิจกรรม
+                </h3>
+                <p className="text-slate-600 font-semibold mt-2">
+                  เปลี่ยนจากใบความรู้เดิม เป็นเอกสาร Google Drive 2 ชุด สำหรับอ่านก่อนเริ่มเกมและทบทวนหลังจบกิจกรรม
+                </p>
+              </div>
             </div>
-            <a
-              href={KNOWLEDGE_PDF_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="shrink-0 inline-flex items-center justify-center gap-2 bg-amber-400 text-slate-950 font-black px-6 py-4 rounded-2xl shadow-lg shadow-amber-100 hover:bg-amber-300"
-            >
-              เปิด PDF ใบความรู้
-            </a>
+
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
+              {KNOWLEDGE_LINKS.map((item, index) => (
+                <a
+                  key={item.url}
+                  href={item.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={`group flex items-center justify-between gap-4 rounded-2xl border p-4 shadow-md transition hover:-translate-y-1 ${
+                    index === 0
+                      ? 'bg-white border-amber-200 hover:bg-amber-50'
+                      : 'bg-white border-lime-200 hover:bg-lime-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`flex h-12 w-12 items-center justify-center rounded-2xl text-white shadow-lg ${
+                      index === 0 ? 'bg-amber-400' : 'bg-lime-500'
+                    }`}>
+                      <FileText />
+                    </div>
+                    <div>
+                      <div className="font-black text-slate-950">{item.title}</div>
+                      <div className="text-sm font-bold text-slate-500">{item.subtitle}</div>
+                    </div>
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-600 group-hover:bg-white">
+                    เปิดไฟล์
+                  </span>
+                </a>
+              ))}
+            </div>
           </div>
         </section>
 
