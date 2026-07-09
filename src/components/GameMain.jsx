@@ -1018,6 +1018,82 @@ export default function GameMain() {
     return null;
   }
 
+
+  async function savePlayerProgressSnapshot(reason = 'progress', overrides = {}) {
+    const current = latestState.current || {};
+    const currentRoomCode = overrides.roomCode || current.roomCode || roomCode;
+    const currentPlayerId = overrides.playerId || current.playerId || playerId;
+    const currentRoomData = overrides.roomData || current.roomData || roomData || {};
+    const currentPlayerName = String(overrides.playerName || current.playerName || playerInfo.name || '').trim();
+
+    if (!currentRoomCode || !currentPlayerId || !currentPlayerName) {
+      console.warn('Skip saving player progress: missing room/player data', {
+        currentRoomCode,
+        currentPlayerId,
+        currentPlayerName,
+      });
+      return false;
+    }
+
+    const targetItems = Math.max(1, Number(overrides.itemLimit || currentRoomData?.itemLimit || currentRoomData?.foodLimit || 5));
+    const nextScoreSum = Number(overrides.scoreSum ?? current.scoreSum ?? scoreSum ?? 0);
+    const nextItemsScanned = Number(overrides.itemsScanned ?? current.scannedItems ?? scannedItems ?? 0);
+    const nextTimeUsed = Number(overrides.timeUsed ?? current.timeUsed ?? timeUsed ?? 0);
+    const scorePackage = buildPlayerScore({
+      scoreSum: nextScoreSum,
+      itemsScanned: nextItemsScanned,
+      itemLimit: targetItems,
+      timeUsed: nextTimeUsed,
+    });
+
+    const payload = {
+      name: currentPlayerName,
+      playerKey: safeDocId(currentPlayerName),
+      sessionId: currentPlayerId,
+      roomCode: currentRoomCode,
+      schoolName: getRoomSchoolName(currentRoomData),
+      adminId: currentRoomData?.adminId || '',
+      avatar: playerInfo.avatar?.icon || overrides.avatar || '',
+      score: Number(scorePackage.rankingScore.toFixed(3)),
+      rankingScore: Number(scorePackage.rankingScore.toFixed(3)),
+      scoreSum: Number(scorePackage.scoreSum.toFixed(3)),
+      averageScore: Number(scorePackage.averageScore.toFixed(3)),
+      speedBonus: Number(scorePackage.speedBonus.toFixed(3)),
+      targetItems: scorePackage.targetItems,
+      completionRate: Number(scorePackage.completionRate.toFixed(3)),
+      completionPercent: Math.round(scorePackage.completionRate * 100),
+      missionCompleted: scorePackage.missionCompleted,
+      itemsScanned: scorePackage.itemsScanned,
+      scannedBarcodes: overrides.scannedBarcodes || current.scannedBarcodes || scannedBarcodes || [],
+      overallLevelTitle: scorePackage.overallLevel.title,
+      overallLevelTitleEn: scorePackage.overallLevel.titleEn,
+      overallLevelColor: scorePackage.overallLevel.colorName,
+      speedLevelTitle: scorePackage.speedLevel.title,
+      speedLevelTitleEn: scorePackage.speedLevel.titleEn,
+      speedAvgSeconds: Number((scorePackage.speedLevel.avgSeconds || 0).toFixed(2)),
+      lastSaveReason: reason,
+      lifecycleStatus: scorePackage.missionCompleted ? 'completed_waiting_summary' : reason,
+      updatedAt: serverTimestamp(),
+    };
+
+    if (reason === 'joined') {
+      payload.joinedAt = serverTimestamp();
+      payload.lifecycleStatus = 'joined_waiting_start';
+    }
+
+    if (scorePackage.missionCompleted) {
+      payload.completedAt = serverTimestamp();
+    }
+
+    if (reason === 'summary' || reason === 'time_expired' || reason === 'room_finished') {
+      payload.finishedAt = serverTimestamp();
+      payload.lifecycleStatus = 'finished_summary_saved';
+    }
+
+    await setDoc(doc(db, 'rooms', currentRoomCode, 'players', currentPlayerId), payload, { merge: true });
+    return true;
+  }
+
   async function saveScanToFirebase({
     roomCode: currentRoomCode,
     playerDocId,
@@ -1114,6 +1190,22 @@ export default function GameMain() {
 
     const currentRoomCode = latestState.current.roomCode;
     const currentRoomData = latestState.current.roomData;
+
+    try {
+      await savePlayerProgressSnapshot(reason, {
+        roomCode: currentRoomCode,
+        playerId: latestState.current.playerId,
+        playerName: latestState.current.playerName,
+        roomData: currentRoomData,
+        scoreSum: latestState.current.scoreSum,
+        itemsScanned: latestState.current.scannedItems,
+        itemLimit: Math.max(1, Number(currentRoomData?.itemLimit || currentRoomData?.foodLimit || 5)),
+        timeUsed: latestState.current.timeUsed,
+        scannedBarcodes: latestState.current.scannedBarcodes,
+      });
+    } catch (err) {
+      console.warn('Unable to save player progress before finishing:', err);
+    }
 
     if (!currentRoomCode || currentRoomData?.status === 'finished') return;
 
@@ -1237,12 +1329,29 @@ export default function GameMain() {
         timeUsed: curTimeUsed,
       });
 
+      const nextScannedBarcodes = Array.from(
+        new Set([...(curScannedBarcodes || []), scannedFood.barcode].map(normalizeBarcode)),
+      );
+
+      if (newItemsCount >= itemLimit) {
+        await savePlayerProgressSnapshot('mission_completed_waiting_summary', {
+          roomCode: curRoomCode,
+          playerId: playerDocId,
+          playerName,
+          roomData: curRoomData,
+          scoreSum: newTotalScore,
+          itemsScanned: newItemsCount,
+          itemLimit,
+          timeUsed: curTimeUsed,
+          scannedBarcodes: nextScannedBarcodes,
+        });
+      }
+
       setScoreSum(newTotalScore);
       setScore(finalScoreToSave);
       setScannedItems(newItemsCount);
       setScannedBarcodes((prev) => {
-        const nextSet = new Set(prev.map(normalizeBarcode));
-        nextSet.add(scannedFood.barcode);
+        const nextSet = new Set([...prev, ...nextScannedBarcodes].map(normalizeBarcode));
         scannedBarcodeSetRef.current = nextSet;
         return Array.from(nextSet);
       });
@@ -1273,7 +1382,7 @@ export default function GameMain() {
 
       setScanStatus({
         type: 'error',
-        msg: 'เกิดข้อผิดพลาดระหว่างอ่านฐานข้อมูลหรือบันทึกคะแนน',
+        msg: `เกิดข้อผิดพลาดระหว่างอ่านฐานข้อมูลหรือบันทึกคะแนน: ${err?.message || 'ตรวจสอบสิทธิ์ Firestore'}`,
       });
 
       window.setTimeout(() => {
@@ -1327,6 +1436,7 @@ export default function GameMain() {
       sessionId: nextPlayerId,
       roomCode,
       schoolName: getRoomSchoolName(currentRoomData),
+      adminId: currentRoomData?.adminId || '',
       avatar: playerInfo.avatar.icon,
       score: 0,
       rankingScore: 0,
@@ -1335,9 +1445,11 @@ export default function GameMain() {
       speedBonus: 0,
       targetItems: Number(currentRoomData?.itemLimit || currentRoomData?.foodLimit || 5),
       completionRate: 0,
+      completionPercent: 0,
       missionCompleted: false,
       itemsScanned: 0,
       scannedBarcodes: [],
+      lifecycleStatus: 'joined_waiting_start',
       joinedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -1389,42 +1501,25 @@ export default function GameMain() {
     if (step !== 'summary' || !roomCode || !playerId || finalSummarySavedRef.current) return;
 
     finalSummarySavedRef.current = true;
-    const finalTargetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
-    const finalScorePackage = buildPlayerScore({
+    savePlayerProgressSnapshot('summary', {
+      roomCode,
+      playerId,
+      playerName: playerInfo.name.trim(),
+      roomData,
       scoreSum,
       itemsScanned: scannedItems,
-      itemLimit: finalTargetItems,
+      itemLimit: targetItems,
       timeUsed,
-    });
-
-    setDoc(
-      doc(db, 'rooms', roomCode, 'players', playerId),
-      {
-        name: playerInfo.name.trim(),
-        avatar: playerInfo.avatar?.icon || '',
-        score: Number(finalScorePackage.rankingScore.toFixed(3)),
-        rankingScore: Number(finalScorePackage.rankingScore.toFixed(3)),
-        scoreSum: Number(finalScorePackage.scoreSum.toFixed(3)),
-        averageScore: Number(finalScorePackage.averageScore.toFixed(3)),
-        speedBonus: Number(finalScorePackage.speedBonus.toFixed(3)),
-        targetItems: finalScorePackage.targetItems,
-        completionRate: Number(finalScorePackage.completionRate.toFixed(3)),
-        missionCompleted: finalScorePackage.missionCompleted,
-        overallLevelTitle: finalScorePackage.overallLevel.title,
-        overallLevelTitleEn: finalScorePackage.overallLevel.titleEn,
-        overallLevelColor: finalScorePackage.overallLevel.colorName,
-        speedLevelTitle: finalScorePackage.speedLevel.title,
-        speedLevelTitleEn: finalScorePackage.speedLevel.titleEn,
-        speedAvgSeconds: Number((finalScorePackage.speedLevel.avgSeconds || 0).toFixed(2)),
-        finishedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    ).catch((err) => {
+      scannedBarcodes,
+    }).catch((err) => {
       console.warn('Unable to save final player summary:', err);
       finalSummarySavedRef.current = false;
+      setScanStatus({
+        type: 'error',
+        msg: `บันทึกสรุปผลไม่สำเร็จ: ${err?.message || 'ตรวจสอบ Firestore Rules'}`,
+      });
     });
-  }, [step, roomCode, playerId, roomData, playerInfo.name, playerInfo.avatar, scoreSum, scannedItems, timeUsed]);
+  }, [step, roomCode, playerId, roomData, playerInfo.name, scoreSum, scannedItems, timeUsed, scannedBarcodes, targetItems]);
 
   const targetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
   const summaryScore = buildPlayerScore({
