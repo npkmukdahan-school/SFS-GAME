@@ -119,16 +119,6 @@ const getTopFoodName = (scans) => {
   return sorted[0] ? `${sorted[0][0]} (${sorted[0][1]} ครั้ง)` : '-';
 };
 
-
-const MIN_TARGET_ITEMS = 5;
-const MAX_TARGET_ITEMS = 10;
-
-const clampTargetItems = (value, fallback = MIN_TARGET_ITEMS) => {
-  const numericValue = Number(value);
-  const safeValue = Number.isFinite(numericValue) && numericValue > 0 ? numericValue : Number(fallback || MIN_TARGET_ITEMS);
-  return Math.min(MAX_TARGET_ITEMS, Math.max(MIN_TARGET_ITEMS, Math.round(safeValue)));
-};
-
 const getPlayerAverageScore = (player) => {
   const averageScore = Number(player.averageScore);
   if (Number.isFinite(averageScore) && averageScore > 0) return averageScore;
@@ -140,18 +130,30 @@ const getPlayerAverageScore = (player) => {
   return 0;
 };
 
+const clampTargetItems = (value, fallback = 5) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(10, Math.max(5, Math.round(parsed)));
+};
+
+const shouldShowRoomInReport = (room) =>
+  room?.reportReady === true ||
+  room?.includeInReport === true ||
+  room?.status === 'finished' ||
+  Boolean(room?.finishedAt || room?.finalizedAt || room?.reportFinalizedAt);
+
 const getRoomTargetItems = (room, players = []) => {
   const roomTarget = Number(room?.itemLimit || room?.foodLimit || room?.targetItems || 0);
   if (roomTarget > 0) return clampTargetItems(roomTarget);
 
   const playerTarget = Number(players.find((player) => Number(player.targetItems || 0) > 0)?.targetItems || 0);
-  return clampTargetItems(playerTarget || MIN_TARGET_ITEMS);
+  return playerTarget > 0 ? clampTargetItems(playerTarget) : 5;
 };
 
 const isPlayerCompletedMission = (player, targetItems) => {
   const itemsScanned = Number(player.itemsScanned || 0);
-  const requiredItems = clampTargetItems(targetItems);
-  return itemsScanned >= requiredItems;
+  if (player.missionCompleted === true && itemsScanned >= 1) return true;
+  return targetItems > 0 && itemsScanned >= targetItems;
 };
 
 const getLatestDate = (...dateValues) => {
@@ -532,7 +534,8 @@ export default function AdminPortal() {
 
     try {
       const roomsSnap = await getDocs(query(collection(db, 'rooms'), where('adminId', '==', admin.uid)));
-      const rooms = roomsSnap.docs.map((roomDoc) => ({ id: roomDoc.id, ...roomDoc.data() }));
+      const allRooms = roomsSnap.docs.map((roomDoc) => ({ id: roomDoc.id, ...roomDoc.data() }));
+      const rooms = allRooms.filter(shouldShowRoomInReport);
       const roomRows = [];
       const dailyMap = new Map();
       const weeklyMap = new Map();
@@ -543,9 +546,15 @@ export default function AdminPortal() {
           getDocs(collection(db, 'rooms', room.id, 'scans')),
         ]);
 
-        const players = playersSnap.docs.map((playerDoc) => ({ id: playerDoc.id, ...playerDoc.data() }));
+        const rawPlayers = playersSnap.docs.map((playerDoc) => ({ id: playerDoc.id, ...playerDoc.data() }));
         const scans = scansSnap.docs.map((scanDoc) => ({ id: scanDoc.id, ...scanDoc.data() }));
-        const targetItems = getRoomTargetItems(room, players);
+        const players = rawPlayers.filter((player) =>
+          player.includeInReport !== false ||
+          player.isFinal === true ||
+          room.reportReady === true ||
+          room.status === 'finished',
+        );
+        const targetItems = getRoomTargetItems(room, players.length ? players : rawPlayers);
         const completedPlayers = players.filter((player) => isPlayerCompletedMission(player, targetItems));
         const incompletePlayers = players.filter((player) => !isPlayerCompletedMission(player, targetItems));
         const completedPlayerIds = new Set(completedPlayers.map((player) => player.id));

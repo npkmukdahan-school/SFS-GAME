@@ -51,6 +51,17 @@ const HERO_AVATARS = [
 
 const SCAN_COOLDOWN_MS = 1400;
 
+const FINAL_REPORT_REASONS = new Set([
+  'summary',
+  'time_expired',
+  'room_finished',
+  'teacher_finished',
+  'teacher_all_completed',
+  'all_players_completed',
+]);
+
+const isFinalReportReason = (reason) => FINAL_REPORT_REASONS.has(String(reason || ''));
+
 const MIN_TARGET_ITEMS = 5;
 const MAX_TARGET_ITEMS = 10;
 
@@ -620,6 +631,24 @@ export default function GameMain() {
           finishRequestedRef.current = true;
           setShowVideoModal(null);
           setIsPaused(false);
+          if (!finalSummarySavedRef.current && playerId) {
+            finalSummarySavedRef.current = true;
+            savePlayerProgressSnapshot(data.finishedReason || 'room_finished', {
+              roomCode,
+              playerId,
+              playerName: playerInfo.name.trim(),
+              roomData: data,
+              scoreSum: latestState.current.scoreSum,
+              itemsScanned: latestState.current.scannedItems,
+              itemLimit: clampTargetItems(data?.itemLimit || data?.foodLimit),
+              timeUsed: latestState.current.timeUsed,
+              scannedBarcodes: latestState.current.scannedBarcodes,
+              finalizeForReport: true,
+            }).catch((err) => {
+              console.warn('Unable to finalize player report after room finished:', err);
+              finalSummarySavedRef.current = false;
+            });
+          }
           setStep('summary');
         }
       } else {
@@ -1063,6 +1092,7 @@ export default function GameMain() {
       itemLimit: targetItems,
       timeUsed: nextTimeUsed,
     });
+    const shouldFinalizeForReport = overrides.finalizeForReport === true || isFinalReportReason(reason);
 
     const payload = {
       name: currentPlayerName,
@@ -1090,7 +1120,12 @@ export default function GameMain() {
       speedLevelTitleEn: scorePackage.speedLevel.titleEn,
       speedAvgSeconds: Number((scorePackage.speedLevel.avgSeconds || 0).toFixed(2)),
       lastSaveReason: reason,
-      lifecycleStatus: scorePackage.missionCompleted ? 'completed_waiting_summary' : reason,
+      lifecycleStatus: shouldFinalizeForReport
+        ? 'finished_summary_saved'
+        : (scorePackage.missionCompleted ? 'completed_waiting_summary' : reason),
+      includeInReport: shouldFinalizeForReport,
+      isFinal: shouldFinalizeForReport,
+      reportReady: shouldFinalizeForReport,
       updatedAt: serverTimestamp(),
     };
 
@@ -1103,8 +1138,9 @@ export default function GameMain() {
       payload.completedAt = serverTimestamp();
     }
 
-    if (reason === 'summary' || reason === 'time_expired' || reason === 'room_finished') {
+    if (shouldFinalizeForReport) {
       payload.finishedAt = serverTimestamp();
+      payload.finalizedAt = serverTimestamp();
       payload.lifecycleStatus = 'finished_summary_saved';
     }
 
@@ -1165,6 +1201,10 @@ export default function GameMain() {
           scannedBarcodes: arrayUnion(food.barcode),
           lastBarcode: food.barcode,
           lastFoodName: food.name,
+          lifecycleStatus: savedScorePackage.missionCompleted ? 'completed_waiting_summary' : 'playing_scanning',
+          includeInReport: false,
+          isFinal: false,
+          reportReady: false,
           updatedAt: serverTimestamp(),
         },
         { merge: true },
@@ -1190,6 +1230,8 @@ export default function GameMain() {
         scanOrder: newItemsCount,
         scoreAfterScan: Number(savedScorePackage.rankingScore.toFixed(3)),
         averageScoreAfterScan: Number(savedScorePackage.averageScore.toFixed(3)),
+        includeInReport: false,
+        reportReady: false,
         createdAt: serverTimestamp(),
       });
     });
@@ -1362,6 +1404,7 @@ export default function GameMain() {
           itemLimit,
           timeUsed: curTimeUsed,
           scannedBarcodes: nextScannedBarcodes,
+          finalizeForReport: false,
         });
       }
 
@@ -1468,6 +1511,9 @@ export default function GameMain() {
       itemsScanned: 0,
       scannedBarcodes: [],
       lifecycleStatus: 'joined_waiting_start',
+      includeInReport: false,
+      isFinal: false,
+      reportReady: false,
       joinedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -1540,6 +1586,7 @@ export default function GameMain() {
       itemLimit: targetItems,
       timeUsed,
       scannedBarcodes,
+      finalizeForReport: true,
     }).catch((err) => {
       console.warn('Unable to save final player summary:', err);
       finalSummarySavedRef.current = false;

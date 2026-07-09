@@ -15,6 +15,7 @@ import {
   serverTimestamp,
   setDoc,
   updateDoc,
+  writeBatch,
 } from 'firebase/firestore';
 
 
@@ -378,16 +379,58 @@ export default function RoomCreator() {
     playAudio(adventureMusic.current);
   };
 
+  
+
+  const finalizeRoomForReport = async (reason = 'time_expired') => {
+    if (!roomCode) return;
+
+    const roomRef = doc(db, 'rooms', roomCode);
+    const batch = writeBatch(db);
+    const finishedElapsedSeconds = getRoomElapsedSeconds(roomData);
+
+    players.forEach((player) => {
+      const playerRef = doc(db, 'rooms', roomCode, 'players', player.id);
+      batch.set(
+        playerRef,
+        {
+          includeInReport: true,
+          isFinal: true,
+          reportReady: true,
+          lifecycleStatus: 'finished_summary_saved',
+          targetItems,
+          missionCompleted: isPlayerCompletedTarget(player, targetItems),
+          finishedAt: serverTimestamp(),
+          finalizedAt: serverTimestamp(),
+          finishedReason: reason,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+    });
+
+    batch.set(
+      roomRef,
+      {
+        status: 'finished',
+        reportReady: true,
+        includeInReport: true,
+        finishedAt: serverTimestamp(),
+        reportFinalizedAt: serverTimestamp(),
+        finishedElapsedSeconds,
+        finishedReason: reason,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    await batch.commit();
+  };
+
   const handleFinishGame = async (reason = 'time_expired') => {
     if (!roomCode) return;
 
     setRoomState('finished');
-    await updateDoc(doc(db, "rooms", roomCode), {
-      status: 'finished',
-      finishedAt: serverTimestamp(),
-      finishedElapsedSeconds: getRoomElapsedSeconds(roomData),
-      updatedAt: serverTimestamp(),
-    });
+    await finalizeRoomForReport(reason);
   };
 
   const handleTeacherFinishGame = async () => {
@@ -402,8 +445,13 @@ export default function RoomCreator() {
   };
 
   const handleReset = async () => {
-    // ลบห้องทิ้งเมื่อกดเริ่มใหม่
-    if(roomCode) await deleteDoc(doc(db, "rooms", roomCode));
+    const preserveFinishedRoomForReport = roomData?.reportReady === true || roomData?.status === 'finished';
+
+    if (roomCode && !preserveFinishedRoomForReport) {
+      const shouldDeleteDraft = window.confirm('ห้องนี้ยังไม่จบเกม ต้องการลบห้องทดสอบนี้หรือไม่? ถ้าไม่ลบ ห้องจะยังไม่เข้ารายงานจนกว่าจะจบเกม');
+      if (shouldDeleteDraft) await deleteDoc(doc(db, 'rooms', roomCode));
+    }
+
     finishRequested.current = false;
     setRoomState('setup');
     setRoomCode('');
