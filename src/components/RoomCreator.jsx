@@ -18,6 +18,15 @@ import {
 } from 'firebase/firestore';
 
 const FDA_JUNIOR_LOGO_URL = 'https://i.postimg.cc/VL8jfMz0/FKVHoyve-Sk-Sp-SWu-Aq-D5xth-KQ.png';
+
+const MIN_TARGET_ITEMS = 5;
+const MAX_TARGET_ITEMS = 10;
+
+const clampTargetItems = (value, fallback = MIN_TARGET_ITEMS) => {
+  const numericValue = Number(value);
+  const safeValue = Number.isFinite(numericValue) && numericValue > 0 ? numericValue : Number(fallback || MIN_TARGET_ITEMS);
+  return Math.min(MAX_TARGET_ITEMS, Math.max(MIN_TARGET_ITEMS, Math.round(safeValue)));
+};
 // วางไฟล์เพลงไว้ที่ public/audio/waiting-music.mp3
 // เวลาเว็บรัน Vite จะเรียกใช้ได้ด้วย path /audio/waiting-music.mp3
 const PUBLIC_BASE_URL = import.meta.env.BASE_URL || '/';
@@ -262,6 +271,7 @@ export default function RoomCreator() {
 
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const timeLimitSeconds = Number(settings.timeLimit || 3) * 60;
+    const itemLimit = clampTargetItems(settings.itemLimit);
 
     finishRequested.current = false;
     setRoomCode(code);
@@ -279,7 +289,7 @@ export default function RoomCreator() {
       foodCollectionPath: `admins/${currentAdmin.uid}/foods`,
       timeLimit: Number(settings.timeLimit || 3),
       timeLimitSeconds,
-      itemLimit: Number(settings.itemLimit || 5),
+      itemLimit,
       startedAt: null,
       pausedAt: null,
       totalPausedMs: 0,
@@ -479,7 +489,7 @@ export default function RoomCreator() {
               </div>
               <div>
                 <label className="block text-sm font-bold text-cyan-400 uppercase tracking-widest mb-3"><Trophy className="inline w-4 h-4 mr-1"/> จำนวนไอเทมเป้าหมาย</label>
-                <input type="range" min="5" max="10" step="1" value={settings.itemLimit} onChange={(e) => setSettings({...settings, itemLimit: Number(e.target.value)})}
+                <input type="range" min="5" max="10" step="1" value={settings.itemLimit} onChange={(e) => setSettings({ ...settings, itemLimit: clampTargetItems(e.target.value) })}
                   className="w-full accent-blue-500 h-2 bg-blue-950 rounded-lg appearance-none cursor-pointer" />
                 <div className="text-center mt-4 font-black text-4xl text-white">{settings.itemLimit} <span className="text-lg text-slate-400">ชิ้น</span></div>
               </div>

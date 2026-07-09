@@ -51,6 +51,15 @@ const HERO_AVATARS = [
 
 const SCAN_COOLDOWN_MS = 1400;
 
+const MIN_TARGET_ITEMS = 5;
+const MAX_TARGET_ITEMS = 10;
+
+const clampTargetItems = (value, fallback = MIN_TARGET_ITEMS) => {
+  const numericValue = Number(value);
+  const safeValue = Number.isFinite(numericValue) && numericValue > 0 ? numericValue : Number(fallback || MIN_TARGET_ITEMS);
+  return Math.min(MAX_TARGET_ITEMS, Math.max(MIN_TARGET_ITEMS, Math.round(safeValue)));
+};
+
 const OVERALL_LEVELS = [
   {
     min: 4.5,
@@ -164,7 +173,7 @@ const getSpeedLevel = (timeUsed = 0, itemsScanned = 0, missionCompleted = false)
 };
 
 const buildPlayerScore = ({ scoreSum = 0, itemsScanned = 0, itemLimit = 5, timeUsed = 0 }) => {
-  const targetItems = Math.max(1, Number(itemLimit || 5));
+  const targetItems = clampTargetItems(itemLimit);
   const scanCount = Math.max(0, Number(itemsScanned || 0));
   const totalScore = Number(scoreSum || 0);
   const averageScore = scanCount > 0 ? totalScore / scanCount : 0;
@@ -540,7 +549,7 @@ export default function GameMain() {
   const [cameraError, setCameraError] = useState('');
   const [facingMode, setFacingMode] = useState('environment');
 
-  const currentTargetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
+  const currentTargetItems = clampTargetItems(roomData?.itemLimit || roomData?.foodLimit);
   const missionCompletedOnClient = step === 'playing' && scannedItems >= currentTargetItems;
 
   const latestState = useRef({
@@ -1035,7 +1044,7 @@ export default function GameMain() {
       return false;
     }
 
-    const targetItems = Math.max(1, Number(overrides.itemLimit || currentRoomData?.itemLimit || currentRoomData?.foodLimit || 5));
+    const targetItems = clampTargetItems(overrides.itemLimit || currentRoomData?.itemLimit || currentRoomData?.foodLimit);
     const nextScoreSum = Number(overrides.scoreSum ?? current.scoreSum ?? scoreSum ?? 0);
     const nextItemsScanned = Number(overrides.itemsScanned ?? current.scannedItems ?? scannedItems ?? 0);
     const nextTimeUsed = Number(overrides.timeUsed ?? current.timeUsed ?? timeUsed ?? 0);
@@ -1199,7 +1208,7 @@ export default function GameMain() {
         roomData: currentRoomData,
         scoreSum: latestState.current.scoreSum,
         itemsScanned: latestState.current.scannedItems,
-        itemLimit: Math.max(1, Number(currentRoomData?.itemLimit || currentRoomData?.foodLimit || 5)),
+        itemLimit: clampTargetItems(currentRoomData?.itemLimit || currentRoomData?.foodLimit),
         timeUsed: latestState.current.timeUsed,
         scannedBarcodes: latestState.current.scannedBarcodes,
       });
@@ -1252,7 +1261,7 @@ export default function GameMain() {
     } = latestState.current;
 
     try {
-      const itemLimit = Number(curRoomData?.itemLimit || curRoomData?.foodLimit || 5);
+      const itemLimit = clampTargetItems(curRoomData?.itemLimit || curRoomData?.foodLimit);
       const playerDocId = curPlayerId || createPlayerSessionId(playerName);
 
       if (curRoomData?.status === 'finished' || isRoomTimeExpired(curRoomData)) {
@@ -1443,7 +1452,7 @@ export default function GameMain() {
       scoreSum: 0,
       averageScore: 0,
       speedBonus: 0,
-      targetItems: Number(currentRoomData?.itemLimit || currentRoomData?.foodLimit || 5),
+      targetItems: clampTargetItems(currentRoomData?.itemLimit || currentRoomData?.foodLimit),
       completionRate: 0,
       completionPercent: 0,
       missionCompleted: false,
@@ -1475,7 +1484,7 @@ export default function GameMain() {
 
     window.setTimeout(() => {
       const latestRoom = latestState.current.roomData || {};
-      const latestTargetItems = Math.max(1, Number(latestRoom.itemLimit || latestRoom.foodLimit || 5));
+      const latestTargetItems = clampTargetItems(latestRoom.itemLimit || latestRoom.foodLimit);
       const latestScannedItems = Number(latestState.current.scannedItems || 0);
 
       isProcessingScan.current = false;
@@ -1497,7 +1506,7 @@ export default function GameMain() {
     return `${m}:${s}`;
   };
 
-  const targetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
+  const targetItems = clampTargetItems(roomData?.itemLimit || roomData?.foodLimit);
   const summaryScore = buildPlayerScore({
     scoreSum,
     itemsScanned: scannedItems,
@@ -1753,7 +1762,7 @@ export default function GameMain() {
                 </li>
                 <li className="flex justify-between">
                   <span>📦 เป้าหมายไอเทม:</span>
-                  <span className="text-white">{roomData?.itemLimit} ชิ้น</span>
+                  <span className="text-white">{clampTargetItems(roomData?.itemLimit || roomData?.foodLimit)} ชิ้น</span>
                 </li>
                 <li className="flex justify-between">
                   <span>⚡ ฐานอาหาร:</span>
@@ -1794,7 +1803,7 @@ export default function GameMain() {
 
               <div className="text-right">
                 <div className="text-xs font-bold text-slate-400">
-                  เป้าหมาย: {scannedItems}/{roomData?.itemLimit}
+                  เป้าหมาย: {scannedItems}/{clampTargetItems(roomData?.itemLimit || roomData?.foodLimit)}
                 </div>
                 <div className="text-[10px] font-black text-cyan-300 uppercase tracking-widest">
                   เหลือเวลา

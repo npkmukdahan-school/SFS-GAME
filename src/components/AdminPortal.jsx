@@ -19,7 +19,6 @@ import {
   serverTimestamp,
   setDoc,
   where,
-  writeBatch,
 } from 'firebase/firestore';
 import {
   BarChart3,
@@ -40,7 +39,7 @@ import {
 import { auth, db } from '../firebase';
 
 const PUBLIC_BASE_URL = import.meta.env.BASE_URL || '/';
-const GAME_LOGO_URL = `${PUBLIC_BASE_URL}sfs_logo.png`;
+const GAME_LOGO_URL = `${PUBLIC_BASE_URL}sfs-game-logo.png`;
 
 const emptyFoodForm = {
   barcode: '',
@@ -64,6 +63,14 @@ const toDate = (value) => {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
+const getDayKey = (dateValue) => {
+  const date = toDate(dateValue) || new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 const getWeekKey = (dateValue) => {
   const date = toDate(dateValue) || new Date();
   const start = new Date(date.getFullYear(), 0, 1);
@@ -72,14 +79,23 @@ const getWeekKey = (dateValue) => {
   return `${date.getFullYear()}-W${String(week).padStart(2, '0')}`;
 };
 
-const getDayKey = (dateValue) => {
-  const date = toDate(dateValue) || new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-};
-
-const formatThaiDate = (dateValue) => {
+const formatDateTime = (dateValue) => {
   const date = toDate(dateValue);
   if (!date) return '-';
+
+  return date.toLocaleString('th-TH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const formatDayLabel = (dateValue) => {
+  const date = toDate(dateValue);
+  if (!date) return '-';
+
   return date.toLocaleDateString('th-TH', {
     year: 'numeric',
     month: 'short',
@@ -101,6 +117,50 @@ const getTopFoodName = (scans) => {
   }, {});
   const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   return sorted[0] ? `${sorted[0][0]} (${sorted[0][1]} ครั้ง)` : '-';
+};
+
+
+const MIN_TARGET_ITEMS = 5;
+const MAX_TARGET_ITEMS = 10;
+
+const clampTargetItems = (value, fallback = MIN_TARGET_ITEMS) => {
+  const numericValue = Number(value);
+  const safeValue = Number.isFinite(numericValue) && numericValue > 0 ? numericValue : Number(fallback || MIN_TARGET_ITEMS);
+  return Math.min(MAX_TARGET_ITEMS, Math.max(MIN_TARGET_ITEMS, Math.round(safeValue)));
+};
+
+const getPlayerAverageScore = (player) => {
+  const averageScore = Number(player.averageScore);
+  if (Number.isFinite(averageScore) && averageScore > 0) return averageScore;
+
+  const itemsScanned = Number(player.itemsScanned || 0);
+  const scoreSum = Number(player.scoreSum || 0);
+  if (itemsScanned > 0 && Number.isFinite(scoreSum)) return scoreSum / itemsScanned;
+
+  return 0;
+};
+
+const getRoomTargetItems = (room, players = []) => {
+  const roomTarget = Number(room?.itemLimit || room?.foodLimit || room?.targetItems || 0);
+  if (roomTarget > 0) return clampTargetItems(roomTarget);
+
+  const playerTarget = Number(players.find((player) => Number(player.targetItems || 0) > 0)?.targetItems || 0);
+  return clampTargetItems(playerTarget || MIN_TARGET_ITEMS);
+};
+
+const isPlayerCompletedMission = (player, targetItems) => {
+  const itemsScanned = Number(player.itemsScanned || 0);
+  const requiredItems = clampTargetItems(targetItems);
+  return itemsScanned >= requiredItems;
+};
+
+const getLatestDate = (...dateValues) => {
+  const validDates = dateValues
+    .map(toDate)
+    .filter(Boolean)
+    .sort((a, b) => b.getTime() - a.getTime());
+
+  return validDates[0] || null;
 };
 
 const getQrCodeUrl = (barcode, size = 180) => {
@@ -147,7 +207,10 @@ export default function AdminPortal() {
     weeklyRows: [],
     roomRows: [],
     totalPlayers: 0,
+    totalCompletedPlayers: 0,
+    totalIncompletePlayers: 0,
     totalRooms: 0,
+    overallCompletedAvgScore: 0,
   });
 
   useEffect(() => {
@@ -479,141 +542,119 @@ export default function AdminPortal() {
           getDocs(collection(db, 'rooms', room.id, 'players')),
           getDocs(collection(db, 'rooms', room.id, 'scans')),
         ]);
+
         const players = playersSnap.docs.map((playerDoc) => ({ id: playerDoc.id, ...playerDoc.data() }));
         const scans = scansSnap.docs.map((scanDoc) => ({ id: scanDoc.id, ...scanDoc.data() }));
-        const roomDate = room.finishedAt || room.createdAt || room.updatedAt;
-        const dayKey = getDayKey(roomDate);
-        const weekKey = getWeekKey(roomDate);
-        const avgScore = average(players.map((player) => player.score));
+        const targetItems = getRoomTargetItems(room, players);
+        const completedPlayers = players.filter((player) => isPlayerCompletedMission(player, targetItems));
+        const incompletePlayers = players.filter((player) => !isPlayerCompletedMission(player, targetItems));
+        const completedPlayerIds = new Set(completedPlayers.map((player) => player.id));
+        const completedScans = scans.filter((scan) => {
+          const scanPlayerId = scan.playerId || scan.playerDocId || scan.playerSessionId || scan.sessionId || '';
+          return completedPlayerIds.has(scanPlayerId);
+        });
+
+        const playerDates = players.flatMap((player) => [
+          player.updatedAt,
+          player.finishedAt,
+          player.completedAt,
+          player.joinedAt,
+          player.startedPlayingAt,
+        ]);
+        const scanDates = scans.map((scan) => scan.createdAt || scan.scannedAt || scan.updatedAt);
+        const latestActivityAt = getLatestDate(
+          room.updatedAt,
+          room.finishedAt,
+          room.createdAt,
+          ...playerDates,
+          ...scanDates,
+        );
+        const reportDate = latestActivityAt || toDate(room.finishedAt || room.createdAt || room.updatedAt) || new Date();
+        const dayKey = getDayKey(reportDate);
+        const weekKey = getWeekKey(reportDate);
+        const completedAverageScores = completedPlayers.map(getPlayerAverageScore).filter((value) => value > 0);
+        const avgScore = average(completedAverageScores);
 
         roomRows.push({
           roomCode: room.id,
           dayKey,
           weekKey,
-          createdAt: toDate(roomDate),
+          createdAt: toDate(room.createdAt),
+          latestActivityAt: reportDate,
+          latestActivityLabel: formatDateTime(reportDate),
+          targetItems,
           playerCount: players.length,
+          completedPlayerCount: completedPlayers.length,
+          incompletePlayerCount: incompletePlayers.length,
           scanCount: scans.length,
+          completedScanCount: completedScans.length,
           avgScore,
           topFood: getTopFoodName(scans),
+          completedTopFood: getTopFoodName(completedScans.length ? completedScans : scans),
+          hasCompletedPlayers: completedPlayers.length > 0,
         });
 
-        if (!dailyMap.has(dayKey)) {
-          dailyMap.set(dayKey, {
-            dayKey,
-            roomCount: 0,
-            playerCount: 0,
-            scanCount: 0,
-            scores: [],
-            scans: [],
-          });
-        }
+        const addToSummaryMap = (summaryMap, key, labelDate) => {
+          if (!summaryMap.has(key)) {
+            summaryMap.set(key, {
+              key,
+              label: labelDate,
+              roomCount: 0,
+              playerCount: 0,
+              completedPlayerCount: 0,
+              incompletePlayerCount: 0,
+              scanCount: 0,
+              completedScanCount: 0,
+              scores: [],
+              scans: [],
+              latestActivityAt: reportDate,
+            });
+          }
 
-        const daily = dailyMap.get(dayKey);
-        daily.roomCount += 1;
-        daily.playerCount += players.length;
-        daily.scanCount += scans.length;
-        daily.scores.push(...players.map((player) => Number(player.score || 0)));
-        daily.scans.push(...scans);
+          const summary = summaryMap.get(key);
+          summary.roomCount += 1;
+          summary.playerCount += players.length;
+          summary.completedPlayerCount += completedPlayers.length;
+          summary.incompletePlayerCount += incompletePlayers.length;
+          summary.scanCount += scans.length;
+          summary.completedScanCount += completedScans.length;
+          summary.scores.push(...completedAverageScores);
+          summary.scans.push(...(completedScans.length ? completedScans : scans));
+          summary.latestActivityAt = getLatestDate(summary.latestActivityAt, reportDate) || summary.latestActivityAt;
+        };
 
-        if (!weeklyMap.has(weekKey)) {
-          weeklyMap.set(weekKey, {
-            weekKey,
-            roomCount: 0,
-            playerCount: 0,
-            scanCount: 0,
-            scores: [],
-            scans: [],
-          });
-        }
-
-        const weekly = weeklyMap.get(weekKey);
-        weekly.roomCount += 1;
-        weekly.playerCount += players.length;
-        weekly.scanCount += scans.length;
-        weekly.scores.push(...players.map((player) => Number(player.score || 0)));
-        weekly.scans.push(...scans);
+        addToSummaryMap(dailyMap, dayKey, reportDate);
+        addToSummaryMap(weeklyMap, weekKey, reportDate);
       }
 
-      const dailyRows = Array.from(dailyMap.values())
+      const buildSummaryRows = (summaryMap, labelFormatter) => Array.from(summaryMap.values())
         .map((row) => ({
           ...row,
+          displayLabel: labelFormatter(row),
           avgScore: average(row.scores),
           topFood: getTopFoodName(row.scans),
         }))
-        .sort((a, b) => b.dayKey.localeCompare(a.dayKey));
+        .sort((a, b) => (toDate(b.latestActivityAt)?.getTime() || 0) - (toDate(a.latestActivityAt)?.getTime() || 0));
 
-      const weeklyRows = Array.from(weeklyMap.values())
-        .map((row) => ({
-          ...row,
-          avgScore: average(row.scores),
-          topFood: getTopFoodName(row.scans),
-        }))
-        .sort((a, b) => b.weekKey.localeCompare(a.weekKey));
+      const dailyRows = buildSummaryRows(dailyMap, (row) => formatDayLabel(row.label));
+      const weeklyRows = buildSummaryRows(weeklyMap, (row) => row.key);
+      const sortedRoomRows = roomRows.sort(
+        (a, b) => (toDate(b.latestActivityAt)?.getTime() || 0) - (toDate(a.latestActivityAt)?.getTime() || 0),
+      );
+      const allCompletedScores = sortedRoomRows.flatMap((room) => (room.hasCompletedPlayers ? [room.avgScore] : []));
 
       setReportData({
         dailyRows,
         weeklyRows,
-        roomRows: roomRows.sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0)),
-        totalPlayers: roomRows.reduce((sum, room) => sum + room.playerCount, 0),
-        totalRooms: roomRows.length,
+        roomRows: sortedRoomRows,
+        totalPlayers: sortedRoomRows.reduce((sum, room) => sum + room.playerCount, 0),
+        totalCompletedPlayers: sortedRoomRows.reduce((sum, room) => sum + room.completedPlayerCount, 0),
+        totalIncompletePlayers: sortedRoomRows.reduce((sum, room) => sum + room.incompletePlayerCount, 0),
+        totalRooms: sortedRoomRows.length,
+        overallCompletedAvgScore: average(allCompletedScores),
       });
     } catch (error) {
       setReportError(`โหลดรายงานไม่ได้: ${error.message}`);
-    } finally {
-      setReportLoading(false);
-    }
-  };
-
-  const handleDeleteRoom = async (roomCode) => {
-    if (!admin || !roomCode) return;
-
-    const confirmed = window.confirm(
-      `ต้องการลบข้อมูลห้อง ${roomCode} ใช่ไหม?\n\nระบบจะลบรายชื่อผู้เล่นและประวัติการสแกนของห้องนี้ทั้งหมด เพื่อไม่ให้นำไปคำนวณรายงานสรุป`,
-    );
-
-    if (!confirmed) return;
-
-    setReportLoading(true);
-    setReportError('');
-
-    try {
-      const roomRef = doc(db, 'rooms', roomCode);
-      const roomSnap = await getDoc(roomRef);
-
-      if (!roomSnap.exists()) {
-        setReportError('ไม่พบข้อมูลห้องที่ต้องการลบ');
-        return;
-      }
-
-      if (roomSnap.data()?.adminId !== admin.uid) {
-        setReportError('ลบไม่ได้: ห้องนี้ไม่ได้เป็นของ Admin คนนี้');
-        return;
-      }
-
-      const [playersSnap, scansSnap] = await Promise.all([
-        getDocs(collection(db, 'rooms', roomCode, 'players')),
-        getDocs(collection(db, 'rooms', roomCode, 'scans')),
-      ]);
-
-      const docsToDelete = [
-        ...playersSnap.docs.map((playerDoc) => playerDoc.ref),
-        ...scansSnap.docs.map((scanDoc) => scanDoc.ref),
-        roomRef,
-      ];
-
-      for (let index = 0; index < docsToDelete.length; index += 450) {
-        const batch = writeBatch(db);
-        docsToDelete.slice(index, index + 450).forEach((ref) => batch.delete(ref));
-        await batch.commit();
-      }
-
-      await loadReports();
-    } catch (error) {
-      setReportError(
-        error?.code === 'permission-denied'
-          ? 'ลบห้องไม่ได้: Firestore Rules ยังไม่อนุญาตให้ลบ scans/players ของห้อง กรุณาอัปเดต Rules แล้ว Publish'
-          : `ลบห้องไม่ได้: ${error.message}`,
-      );
     } finally {
       setReportLoading(false);
     }
@@ -969,7 +1010,9 @@ export default function AdminPortal() {
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div>
               <h2 className="text-2xl font-black flex items-center gap-2"><BarChart3 className="text-cyan-300" /> รายงานสรุปการเล่นเกม</h2>
-              <p className="text-slate-400 font-bold text-sm mt-1">คะแนนเฉลี่ยรายวัน แยกกับรายสัปดาห์ รายห้อง จำนวนผู้เล่น และขนมที่เลือกบ่อย</p>
+              <p className="text-slate-400 font-bold text-sm mt-1">
+                เรียงจากวัน-เวลาล่าสุดที่มีการบันทึก และคำนวณค่าเฉลี่ยเฉพาะผู้เล่นที่สแกนครบตามโจทย์เท่านั้น
+              </p>
             </div>
             <button
               type="button"
@@ -981,16 +1024,27 @@ export default function AdminPortal() {
             </button>
           </div>
           {reportError && <div className="rounded-2xl border border-rose-400/30 bg-rose-500/15 p-3 font-bold text-rose-100">{reportError}</div>}
-          <div className="grid md:grid-cols-3 gap-4">
+
+          <div className="rounded-3xl border border-lime-300/20 bg-lime-300/10 p-5 text-sm font-bold text-lime-100">
+            หลักการคำนวณรายงาน: คะแนนเฉลี่ยของห้อง/รายวัน/รายสัปดาห์ จะใช้เฉพาะผู้เล่นที่มีจำนวนสแกนสำเร็จครบตามเป้าหมายที่ครูกำหนดในห้องนั้น
+            ผู้เล่นที่ยังสแกนไม่ครบจะถูกนับเป็นจำนวนผู้เล่น/ผู้เล่นยังไม่ครบ แต่จะไม่ถูกนำคะแนนมาคำนวณค่าเฉลี่ย
+          </div>
+
+          <div className="grid md:grid-cols-4 gap-4">
             <div className="bg-white/[0.07] border border-white/10 rounded-2xl p-5">
               <Trophy className="text-amber-300 mb-3" />
-              <div className="text-3xl font-black">{average(reportData.roomRows.map((room) => room.avgScore)).toFixed(2)}</div>
-              <div className="text-slate-400 font-bold text-sm">คะแนนเฉลี่ยรวม</div>
+              <div className="text-3xl font-black">{reportData.overallCompletedAvgScore.toFixed(2)}</div>
+              <div className="text-slate-400 font-bold text-sm">คะแนนเฉลี่ยรวมเฉพาะผู้เล่นสแกนครบ</div>
             </div>
             <div className="bg-white/[0.07] border border-white/10 rounded-2xl p-5">
               <Users className="text-lime-300 mb-3" />
-              <div className="text-3xl font-black">{reportData.totalPlayers}</div>
-              <div className="text-slate-400 font-bold text-sm">จำนวนผู้เล่นทั้งหมด</div>
+              <div className="text-3xl font-black">{reportData.totalCompletedPlayers}</div>
+              <div className="text-slate-400 font-bold text-sm">ผู้เล่นที่สแกนครบ</div>
+            </div>
+            <div className="bg-white/[0.07] border border-white/10 rounded-2xl p-5">
+              <Users className="text-orange-300 mb-3" />
+              <div className="text-3xl font-black">{reportData.totalIncompletePlayers}</div>
+              <div className="text-slate-400 font-bold text-sm">ผู้เล่นที่ยังสแกนไม่ครบ</div>
             </div>
             <div className="bg-white/[0.07] border border-white/10 rounded-2xl p-5">
               <Database className="text-cyan-300 mb-3" />
@@ -998,8 +1052,12 @@ export default function AdminPortal() {
               <div className="text-slate-400 font-bold text-sm">จำนวนห้องเกม</div>
             </div>
           </div>
+
           <section className="bg-white/[0.07] border border-white/10 rounded-3xl overflow-hidden">
-            <div className="p-5 border-b border-white/10 font-black text-xl">สรุปรายวัน</div>
+            <div className="p-5 border-b border-white/10">
+              <div className="font-black text-xl">สรุปรายวัน</div>
+              <div className="mt-1 text-xs font-bold text-slate-400">ค่าเฉลี่ยรายวันคิดจากผู้เล่นที่สแกนครบเท่านั้น และเรียงจากวันที่มีข้อมูลล่าสุด</div>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left">
                 <thead className="text-xs uppercase tracking-widest text-cyan-300 bg-slate-950/40">
@@ -1007,24 +1065,28 @@ export default function AdminPortal() {
                     <th className="p-4">วันที่</th>
                     <th className="p-4 text-right">คะแนนเฉลี่ย</th>
                     <th className="p-4 text-right">จำนวนห้อง</th>
-                    <th className="p-4 text-right">ผู้เล่น</th>
+                    <th className="p-4 text-right">ผู้เล่นทั้งหมด</th>
+                    <th className="p-4 text-right">สแกนครบ</th>
+                    <th className="p-4 text-right">ยังไม่ครบ</th>
                     <th className="p-4 text-right">สแกนทั้งหมด</th>
-                    <th className="p-4">ขนมที่เลือกบ่อย</th>
+                    <th className="p-4">ขนม/อาหารที่เลือกบ่อย</th>
                   </tr>
                 </thead>
                 <tbody>
                   {reportData.dailyRows.map((row) => (
-                    <tr key={row.dayKey} className="border-t border-white/10">
-                      <td className="p-4 font-black">{formatThaiDate(row.dayKey)}</td>
-                      <td className="p-4 text-right">{row.avgScore.toFixed(2)}</td>
+                    <tr key={row.key} className="border-t border-white/10">
+                      <td className="p-4 font-black">{row.displayLabel}</td>
+                      <td className="p-4 text-right font-black text-lime-200">{row.completedPlayerCount > 0 ? row.avgScore.toFixed(2) : '-'}</td>
                       <td className="p-4 text-right">{row.roomCount}</td>
                       <td className="p-4 text-right">{row.playerCount}</td>
+                      <td className="p-4 text-right text-lime-200 font-black">{row.completedPlayerCount}</td>
+                      <td className="p-4 text-right text-orange-200 font-black">{row.incompletePlayerCount}</td>
                       <td className="p-4 text-right">{row.scanCount}</td>
                       <td className="p-4">{row.topFood}</td>
                     </tr>
                   ))}
                   {reportData.dailyRows.length === 0 && (
-                    <tr><td colSpan="6" className="p-8 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลรายวัน</td></tr>
+                    <tr><td colSpan="8" className="p-8 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลรายวัน</td></tr>
                   )}
                 </tbody>
               </table>
@@ -1032,7 +1094,10 @@ export default function AdminPortal() {
           </section>
 
           <section className="bg-white/[0.07] border border-white/10 rounded-3xl overflow-hidden">
-            <div className="p-5 border-b border-white/10 font-black text-xl">สรุปรายสัปดาห์</div>
+            <div className="p-5 border-b border-white/10">
+              <div className="font-black text-xl">สรุปรายสัปดาห์</div>
+              <div className="mt-1 text-xs font-bold text-slate-400">ค่าเฉลี่ยรายสัปดาห์คิดจากผู้เล่นที่สแกนครบเท่านั้น</div>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left">
                 <thead className="text-xs uppercase tracking-widest text-cyan-300 bg-slate-950/40">
@@ -1040,70 +1105,79 @@ export default function AdminPortal() {
                     <th className="p-4">สัปดาห์</th>
                     <th className="p-4 text-right">คะแนนเฉลี่ย</th>
                     <th className="p-4 text-right">จำนวนห้อง</th>
-                    <th className="p-4 text-right">ผู้เล่น</th>
+                    <th className="p-4 text-right">ผู้เล่นทั้งหมด</th>
+                    <th className="p-4 text-right">สแกนครบ</th>
+                    <th className="p-4 text-right">ยังไม่ครบ</th>
                     <th className="p-4 text-right">สแกนทั้งหมด</th>
-                    <th className="p-4">ขนมที่เลือกบ่อย</th>
+                    <th className="p-4">ขนม/อาหารที่เลือกบ่อย</th>
                   </tr>
                 </thead>
                 <tbody>
                   {reportData.weeklyRows.map((row) => (
-                    <tr key={row.weekKey} className="border-t border-white/10">
-                      <td className="p-4 font-black">{row.weekKey}</td>
-                      <td className="p-4 text-right">{row.avgScore.toFixed(2)}</td>
+                    <tr key={row.key} className="border-t border-white/10">
+                      <td className="p-4 font-black">{row.displayLabel}</td>
+                      <td className="p-4 text-right font-black text-lime-200">{row.completedPlayerCount > 0 ? row.avgScore.toFixed(2) : '-'}</td>
                       <td className="p-4 text-right">{row.roomCount}</td>
                       <td className="p-4 text-right">{row.playerCount}</td>
+                      <td className="p-4 text-right text-lime-200 font-black">{row.completedPlayerCount}</td>
+                      <td className="p-4 text-right text-orange-200 font-black">{row.incompletePlayerCount}</td>
                       <td className="p-4 text-right">{row.scanCount}</td>
                       <td className="p-4">{row.topFood}</td>
                     </tr>
                   ))}
                   {reportData.weeklyRows.length === 0 && (
-                    <tr><td colSpan="6" className="p-8 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลรายงาน</td></tr>
+                    <tr><td colSpan="8" className="p-8 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลรายงาน</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
           </section>
+
           <section className="bg-white/[0.07] border border-white/10 rounded-3xl overflow-hidden">
-            <div className="p-5 border-b border-white/10 font-black text-xl">คะแนนเฉลี่ยแต่ละห้อง</div>
+            <div className="p-5 border-b border-white/10">
+              <div className="font-black text-xl">สรุปผลแต่ละห้อง เรียงจากข้อมูลล่าสุด</div>
+              <div className="mt-1 text-xs font-bold text-slate-400">คะแนนเฉลี่ยของห้องใช้เฉพาะผู้เล่นที่สแกนครบตามโจทย์</div>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left">
                 <thead className="text-xs uppercase tracking-widest text-cyan-300 bg-slate-950/40">
                   <tr>
                     <th className="p-4">รหัสห้อง</th>
-                    <th className="p-4">วันที่</th>
-                    <th className="p-4">สัปดาห์</th>
+                    <th className="p-4">บันทึกล่าสุด</th>
+                    <th className="p-4 text-right">เป้าหมาย</th>
                     <th className="p-4 text-right">คะแนนเฉลี่ย</th>
-                    <th className="p-4 text-right">ผู้เล่น</th>
+                    <th className="p-4 text-right">ผู้เล่นทั้งหมด</th>
+                    <th className="p-4 text-right">สแกนครบ</th>
+                    <th className="p-4 text-right">ยังไม่ครบ</th>
                     <th className="p-4 text-right">สแกน</th>
                     <th className="p-4">ขนมที่เลือกบ่อย</th>
-                    <th className="p-4 text-right">จัดการ</th>
                   </tr>
                 </thead>
                 <tbody>
                   {reportData.roomRows.map((row) => (
-                    <tr key={row.roomCode} className="border-t border-white/10">
+                    <tr key={row.roomCode} className="border-t border-white/10 align-top">
                       <td className="p-4 font-mono text-cyan-100">{row.roomCode}</td>
-                      <td className="p-4">{formatThaiDate(row.createdAt)}</td>
-                      <td className="p-4">{row.weekKey}</td>
-                      <td className="p-4 text-right">{row.avgScore.toFixed(2)}</td>
+                      <td className="p-4">
+                        <div className="font-bold text-white">{row.latestActivityLabel}</div>
+                        <div className="mt-1 text-xs text-slate-400">{row.dayKey} / {row.weekKey}</div>
+                      </td>
+                      <td className="p-4 text-right">{row.targetItems} ชิ้น</td>
+                      <td className="p-4 text-right font-black">
+                        {row.hasCompletedPlayers ? (
+                          <span className="text-lime-200">{row.avgScore.toFixed(2)}</span>
+                        ) : (
+                          <span className="text-slate-500">ไม่นำมาคำนวณ</span>
+                        )}
+                      </td>
                       <td className="p-4 text-right">{row.playerCount}</td>
+                      <td className="p-4 text-right text-lime-200 font-black">{row.completedPlayerCount}</td>
+                      <td className="p-4 text-right text-orange-200 font-black">{row.incompletePlayerCount}</td>
                       <td className="p-4 text-right">{row.scanCount}</td>
                       <td className="p-4">{row.topFood}</td>
-                      <td className="p-4 text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteRoom(row.roomCode)}
-                          disabled={reportLoading}
-                          className="inline-flex items-center gap-2 rounded-xl bg-rose-500/15 px-3 py-2 font-black text-rose-200 hover:bg-rose-500/25 disabled:opacity-50"
-                          title="ลบห้องทดสอบออกจากรายงาน"
-                        >
-                          <Trash2 size={16} /> ลบห้อง
-                        </button>
-                      </td>
                     </tr>
                   ))}
                   {reportData.roomRows.length === 0 && (
-                    <tr><td colSpan="8" className="p-8 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลห้องเกม</td></tr>
+                    <tr><td colSpan="9" className="p-8 text-center text-slate-400 font-bold">ยังไม่มีข้อมูลห้องเกม</td></tr>
                   )}
                 </tbody>
               </table>
