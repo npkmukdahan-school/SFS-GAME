@@ -20,6 +20,7 @@ import {
 const PUBLIC_BASE_URL = import.meta.env.BASE_URL || '/';
 const GAME_LOGO_URL = `${PUBLIC_BASE_URL}sfs_logo.png`;
 const GDA_BANNER_URL = `${PUBLIC_BASE_URL}gda-healthy-banner.png`;
+const LOGO_ORYOR_URL = `${PUBLIC_BASE_URL}logo_oryor.png`;
 const SCORE_CRITERIA_BANNER_URL = `${PUBLIC_BASE_URL}score-criteria-banner.png`;
 
 const KNOWLEDGE_LINKS = [
@@ -84,7 +85,7 @@ const heroSlides = [
     imageClass: 'object-contain bg-white p-4',
   },
   {
-    src: GDA_BANNER_URL,
+    src: LOGO_ORYOR_URL,
     alt: 'ก่อนกินเช็ก GDA สนุกได้ สุขภาพดีด้วย',
     label: 'เช็ก GDA',
     imageClass: 'object-contain bg-white',
