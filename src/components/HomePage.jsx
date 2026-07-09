@@ -25,13 +25,13 @@ const SCORE_CRITERIA_BANNER_URL = `${PUBLIC_BASE_URL}score-criteria-banner.png`;
 
 const KNOWLEDGE_LINKS = [
   {
-    title: 'ใบความรู้ที่ 1',
-    subtitle: 'เอกสารประกอบกิจกรรม',
+    title: 'ใบความรู้ที่ 1 ฉลากโภชนาการ GDA',
+    subtitle: 'เห็นชัด อ่านง่าย ได้ผลทันที',
     url: 'https://drive.google.com/file/d/1wDKVBtkIqsdO5GH6zu7AF_Eo_e7f5pwh/view?usp=sharing',
   },
   {
-    title: 'ใบความรู้ที่ 2',
-    subtitle: 'เอกสารเพิ่มเติม',
+    title: 'ใบความรู้ที่ 2 ฉลากโภชนาการ GDA',
+    subtitle: 'อ่านง่าย เข้าใจไว ห่างไกลความอ้วน',
     url: 'https://drive.google.com/file/d/1mXO5u-LG2MJ-qxFFOFYF-W-oDrmAUV5h/view?usp=sharing',
   },
 ];
