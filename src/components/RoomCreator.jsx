@@ -17,6 +17,20 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 
+
+const getPlayerScannedCount = (player) =>
+  Number(
+    player?.itemsScanned ??
+      player?.scannedItems ??
+      player?.scanCount ??
+      player?.scannedBarcodes?.length ??
+      0,
+  );
+
+const isPlayerCompletedTarget = (player, targetItems) =>
+  player?.missionCompleted === true || getPlayerScannedCount(player) >= targetItems;
+
+
 const FDA_JUNIOR_LOGO_URL = 'https://i.postimg.cc/VL8jfMz0/FKVHoyve-Sk-Sp-SWu-Aq-D5xth-KQ.png';
 
 const MIN_TARGET_ITEMS = 5;
