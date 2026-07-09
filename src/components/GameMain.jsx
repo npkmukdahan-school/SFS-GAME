@@ -113,36 +113,44 @@ const OVERALL_LEVELS = [
 
 const SPEED_LEVELS = [
   {
-    maxAvgSeconds: 15,
+    minAvgSeconds: 0,
+    maxAvgSeconds: 30,
+    rangeLabel: '≤ 30 วินาที/ชิ้น',
     bonus: 0.05,
     icon: '⚡',
-    title: 'สายฟ้าแลบ',
+    title: 'สายลับสายฟ้า',
     titleEn: 'Lightning Agent',
-    note: 'เร็วมากและยังเลือกได้ครบตามภารกิจ',
+    note: 'เร็วมาก สแกนครบตามภารกิจและตัดสินใจได้อย่างมั่นใจ',
   },
   {
-    maxAvgSeconds: 30,
+    minAvgSeconds: 31,
+    maxAvgSeconds: 44,
+    rangeLabel: '31-44 วินาที/ชิ้น',
     bonus: 0.03,
-    icon: '🚀',
-    title: 'มือไวระดับโปร',
-    titleEn: 'Swift Agent',
-    note: 'ทำภารกิจได้รวดเร็วและมั่นใจ',
+    icon: '🏃',
+    title: 'สายลับว่องไว',
+    titleEn: 'Agile Agent',
+    note: 'ความเร็วดี อ่านข้อมูลและเลือกได้รวดเร็ว',
   },
   {
-    maxAvgSeconds: 45,
+    minAvgSeconds: 45,
+    maxAvgSeconds: 60,
+    rangeLabel: '45-60 วินาที/ชิ้น',
     bonus: 0.01,
-    icon: '🕵️',
-    title: 'นักสืบใจเย็น',
-    titleEn: 'Steady Agent',
-    note: 'ใช้เวลาเหมาะสม อ่านข้อมูลก่อนตัดสินใจ',
+    icon: '🚶',
+    title: 'สายลับรอบคอบ',
+    titleEn: 'Balanced Agent',
+    note: 'ความเร็วปานกลาง มีเวลาอ่านฉลากก่อนตัดสินใจ',
   },
   {
+    minAvgSeconds: 61,
     maxAvgSeconds: Infinity,
+    rangeLabel: '> 61 วินาที/ชิ้น',
     bonus: 0,
-    icon: '🧭',
-    title: 'นักสำรวจรอบคอบ',
-    titleEn: 'Careful Agent',
-    note: 'ค่อย ๆ เลือกอย่างรอบคอบ ยังไม่มีโบนัสความเร็ว',
+    icon: '🐢',
+    title: 'สายลับใจเย็น',
+    titleEn: 'Calm Agent',
+    note: 'ค่อนข้างช้า ยังไม่มีโบนัสความเร็ว แต่ยังเน้นความถูกต้องได้',
   },
 ];
 
@@ -157,6 +165,7 @@ const getSpeedLevel = (timeUsed = 0, itemsScanned = 0, missionCompleted = false)
       icon: '⏳',
       title: 'ยังไม่ครบภารกิจ',
       titleEn: 'Mission Not Complete',
+      rangeLabel: 'ยังไม่คำนวณ',
       bonus: 0,
       avgSeconds: itemsScanned ? Number(timeUsed || 0) / itemsScanned : 0,
       note: 'ต้องสแกนครบตามจำนวนที่ครูกำหนดก่อน จึงจะได้รับระดับความเร็ว',
@@ -2057,6 +2066,9 @@ export default function GameMain() {
                   </div>
                   <h3 className="text-2xl font-black text-amber-300">{summarySpeedLevel.title}</h3>
                   <div className="text-sm font-black text-white mt-1">({summarySpeedLevel.titleEn})</div>
+                  <div className="mt-3 inline-flex rounded-full border border-amber-400/40 bg-amber-500/10 px-4 py-2 text-xs font-black text-amber-100">
+                    เฉลี่ยต่อชิ้น: {summarySpeedLevel.rangeLabel || 'ยังไม่คำนวณ'}
+                  </div>
                   <p className="mt-3 text-sm leading-relaxed text-slate-300">{summarySpeedLevel.note}</p>
                 </div>
               </div>
@@ -2102,6 +2114,27 @@ export default function GameMain() {
                     </div>
                   ))}
                 </div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl bg-[#0a192f] border border-amber-500/40 p-5 mt-5">
+              <h3 className="text-lg font-black text-amber-300 mb-4 text-center">
+                เกณฑ์คะแนนโบนัสความเร็ว
+              </h3>
+              <div className="space-y-2">
+                {SPEED_LEVELS.map((level) => (
+                  <div
+                    key={level.titleEn}
+                    className="grid grid-cols-[7.5rem_1fr_5.5rem] md:grid-cols-[10rem_1fr_7rem] gap-3 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-sm items-center"
+                  >
+                    <div className="font-black text-white">{level.rangeLabel}</div>
+                    <div>
+                      <div className="font-black text-white">{level.icon} {level.title}</div>
+                      <div className="font-bold text-slate-400">({level.titleEn})</div>
+                    </div>
+                    <div className="text-right font-black text-amber-300">+{Number(level.bonus || 0).toFixed(3)}</div>
+                  </div>
+                ))}
               </div>
             </div>
 

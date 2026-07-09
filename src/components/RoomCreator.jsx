@@ -80,6 +80,12 @@ export default function RoomCreator() {
   const [timeLeft, setTimeLeft] = useState(0);
   const [players, setPlayers] = useState([]);
   const [roomData, setRoomData] = useState(null);
+
+  const targetItems = clampTargetItems(roomData?.itemLimit || settings.itemLimit || 5);
+  const completedPlayerCount = players.filter((player) => isPlayerCompletedTarget(player, targetItems)).length;
+  const incompletePlayerCount = Math.max(0, players.length - completedPlayerCount);
+  const canTeacherFinishGame = roomState === 'playing' && players.length > 0 && incompletePlayerCount === 0;
+
   const [currentAdmin, setCurrentAdmin] = useState(null);
   const [currentAdminProfile, setCurrentAdminProfile] = useState(null);
   const [authReady, setAuthReady] = useState(false);
@@ -358,7 +364,7 @@ export default function RoomCreator() {
     playAudio(adventureMusic.current);
   };
 
-  const handleFinishGame = async () => {
+  const handleFinishGame = async (reason = 'time_expired') => {
     if (!roomCode) return;
 
     setRoomState('finished');
@@ -368,6 +374,17 @@ export default function RoomCreator() {
       finishedElapsedSeconds: getRoomElapsedSeconds(roomData),
       updatedAt: serverTimestamp(),
     });
+  };
+
+  const handleTeacherFinishGame = async () => {
+    if (!canTeacherFinishGame) {
+      alert(`ยังจบเกมไม่ได้ครับ ต้องรอให้ผู้เล่นทุกคนสแกนครบ ${targetItems} ชิ้น หรือรอเวลาหมดตามกติกาห้อง`);
+      return;
+    }
+
+    if (!window.confirm('ผู้เล่นทุกคนสแกนครบแล้ว ต้องการจบเกมและสรุปผลทันทีหรือไม่?')) return;
+
+    await handleFinishGame('all_players_completed');
   };
 
   const handleReset = async () => {
@@ -543,9 +560,41 @@ export default function RoomCreator() {
                   <span className="block text-cyan-400 font-bold uppercase tracking-widest text-sm mb-1">เวลาที่เหลือ</span>
                   <span className={`text-6xl font-black tracking-wider ${timeLeft < 60 ? 'text-red-500 animate-pulse' : 'text-white'}`}>{formatTime(timeLeft)}</span>
                </div>
-               <button onClick={handlePauseGame} disabled={roomState === 'paused'} className={`bg-amber-500 text-slate-900 font-black py-4 px-8 rounded-2xl flex items-center gap-2 uppercase tracking-widest ${roomState === 'paused' ? 'opacity-50' : 'active:scale-95'}`}>
+               <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center">
+                 <button onClick={handlePauseGame} disabled={roomState === 'paused'} className={`bg-amber-500 text-slate-900 font-black py-4 px-8 rounded-2xl flex items-center gap-2 uppercase tracking-widest ${roomState === 'paused' ? 'opacity-50' : 'active:scale-95'}`}>
                  <Pause className="fill-slate-900" /> หยุดชั่วคราว
                </button>
+                 <button
+                   onClick={handleTeacherFinishGame}
+                   disabled={!canTeacherFinishGame}
+                   className={`font-black py-4 px-8 rounded-2xl flex items-center justify-center gap-2 uppercase tracking-widest transition-all ${canTeacherFinishGame ? 'bg-emerald-500 text-slate-900 active:scale-95 shadow-[0_0_24px_rgba(16,185,129,0.35)]' : 'bg-slate-700/70 text-slate-400 cursor-not-allowed border border-slate-600'}`}
+                   title={canTeacherFinishGame ? 'ผู้เล่นทุกคนสแกนครบแล้ว สามารถจบเกมได้' : 'ต้องรอให้ผู้เล่นทุกคนสแกนครบก่อน หรือรอเวลาหมด'}
+                 >
+                   <Trophy className={canTeacherFinishGame ? 'fill-slate-900' : ''} /> จบเกมทันที
+                 </button>
+               </div>
+            </div>
+
+            
+
+            <div className="mb-6 rounded-3xl border border-emerald-400/40 bg-emerald-500/10 p-5 shadow-[0_0_24px_rgba(16,185,129,0.12)]">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div>
+                  <div className="text-xs font-black text-emerald-200 uppercase tracking-[0.25em] mb-1">สถานะการสแกนครบของห้อง</div>
+                  <div className="text-2xl font-black text-white">
+                    สแกนครบแล้ว {completedPlayerCount}/{players.length} คน
+                    <span className="ml-2 text-sm font-bold text-slate-400">เป้าหมาย {targetItems} ชิ้น/คน</span>
+                  </div>
+                  <div className="mt-2 text-sm font-bold text-slate-300">
+                    {canTeacherFinishGame
+                      ? 'ผู้เล่นทุกคนสแกนครบแล้ว ครูสามารถกดจบเกมเพื่อสรุปผลทันทีได้'
+                      : 'ยังมีผู้เล่น ' + incompletePlayerCount + ' คนที่สแกนไม่ครบ ปุ่มจบเกมจะยังใช้งานไม่ได้'}
+                  </div>
+                </div>
+                <div className={`rounded-2xl px-5 py-3 text-center font-black ${canTeacherFinishGame ? 'bg-emerald-400 text-slate-900' : 'bg-slate-800 text-slate-300 border border-slate-600'}`}>
+                  {canTeacherFinishGame ? 'พร้อมจบเกม' : 'รอให้ครบทุกคน'}
+                </div>
+              </div>
             </div>
 
             <div className="bg-[#112240]/80 backdrop-blur-xl border border-blue-500/30 rounded-[2rem] overflow-hidden shadow-2xl">
@@ -559,6 +608,7 @@ export default function RoomCreator() {
                      <tr className="text-cyan-600 uppercase tracking-widest text-sm">
                        <th className="pb-2 px-4 font-black">อันดับ</th>
                        <th className="pb-2 px-4 font-black">สายลับ</th>
+                       <th className="pb-2 px-4 font-black text-center">สแกน/เป้าหมาย</th>
                        <th className="pb-2 px-4 font-black text-right">คะแนนรวม</th>
                      </tr>
                    </thead>
@@ -569,6 +619,9 @@ export default function RoomCreator() {
                             <span className={`inline-flex w-8 h-8 rounded-full items-center justify-center font-black ${index === 0 ? 'bg-amber-500 text-slate-900' : index === 1 ? 'bg-slate-300 text-slate-900' : index === 2 ? 'bg-orange-400 text-slate-900' : 'bg-slate-800 text-slate-400'}`}>{index + 1}</span>
                          </td>
                          <td className="p-4 font-bold text-lg text-white flex items-center gap-2"><span className="text-2xl">{p.avatar}</span> {p.name}</td>
+                         <td className="p-4 text-center font-black text-lg text-emerald-300">
+                           {getPlayerScannedCount(p)}/{targetItems}
+                         </td>
                          <td className="p-4 rounded-r-xl font-black text-2xl text-cyan-400 text-right drop-shadow-[0_0_8px_rgba(6,182,212,0.5)]">
                            {p.score > 0 ? p.score.toFixed(3) : "0.000"}
                          </td>
