@@ -524,6 +524,7 @@ export default function GameMain() {
 
   const isProcessingScan = useRef(false);
   const finishRequestedRef = useRef(false);
+  const finalSummarySavedRef = useRef(false);
   const lastScanRef = useRef({ code: '', time: 0 });
   const foodCacheRef = useRef(new Map());
   const foodIndexRef = useRef(new Map());
@@ -538,6 +539,9 @@ export default function GameMain() {
   });
   const [cameraError, setCameraError] = useState('');
   const [facingMode, setFacingMode] = useState('environment');
+
+  const currentTargetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
+  const missionCompletedOnClient = step === 'playing' && scannedItems >= currentTargetItems;
 
   const latestState = useRef({
     scoreSum,
@@ -667,7 +671,7 @@ export default function GameMain() {
 
   useEffect(() => {
     let hintTimer;
-    if (step === 'playing' && !isPaused && !showVideoModal && !cameraError) {
+    if (step === 'playing' && !isPaused && !showVideoModal && !cameraError && !missionCompletedOnClient) {
       const hints = [
         'เล็ง QR Code ให้อยู่กลางกรอบ',
         'ขยับมือถือเข้าใกล้ QR Code อีกเล็กน้อยถ้าอ่านไม่ติด',
@@ -684,13 +688,13 @@ export default function GameMain() {
     }
 
     return () => clearInterval(hintTimer);
-  }, [step, isPaused, showVideoModal, cameraError]);
+  }, [step, isPaused, showVideoModal, cameraError, missionCompletedOnClient]);
 
   useEffect(() => {
     actionMusic.current.loop = true;
     actionMusic.current.volume = 0.35;
 
-    if (step === 'playing' && !isPaused && !showVideoModal) {
+    if (step === 'playing' && !isPaused && !showVideoModal && !missionCompletedOnClient) {
       actionMusic.current.play().catch(() => {});
     } else {
       actionMusic.current.pause();
@@ -699,7 +703,7 @@ export default function GameMain() {
     return () => {
       actionMusic.current.pause();
     };
-  }, [step, isPaused, showVideoModal]);
+  }, [step, isPaused, showVideoModal, missionCompletedOnClient]);
 
   useEffect(() => {
     if (step === 'summary') {
@@ -720,6 +724,7 @@ export default function GameMain() {
       step === 'playing' &&
       !isPaused &&
       !showVideoModal &&
+      !missionCompletedOnClient &&
       codeReader.current
     ) {
       startScanner();
@@ -732,7 +737,15 @@ export default function GameMain() {
       codeReader.current?.reset();
       stopCamera();
     };
-  }, [step, isPaused, showVideoModal, facingMode]);
+  }, [step, isPaused, showVideoModal, facingMode, missionCompletedOnClient]);
+
+  useEffect(() => {
+    if (missionCompletedOnClient) {
+      codeReader.current?.reset();
+      stopCamera();
+      setCameraError('');
+    }
+  }, [missionCompletedOnClient]);
 
   function stopCamera() {
     scannerActiveRef.current = false;
@@ -1157,7 +1170,9 @@ export default function GameMain() {
       }
 
       if (curScannedItems >= itemLimit) {
-        setScanStatus({ type: 'success', msg: 'สแกนครบตามภารกิจแล้ว รอครูปิดเกมได้เลย' });
+        codeReader.current?.reset();
+        stopCamera();
+        setScanStatus({ type: 'success', msg: 'สแกนครบตามภารกิจแล้ว กำลังรอหมดเวลา/รอครูปิดห้อง' });
         isProcessingScan.current = false;
         return;
       }
@@ -1232,7 +1247,13 @@ export default function GameMain() {
         return Array.from(nextSet);
       });
       setSpeedBonus(earnedBonus);
-      setScanStatus({ type: 'success', msg: `✅ สแกนสำเร็จ! เจอ ${scannedFood.name}` });
+      if (newItemsCount >= itemLimit) {
+        codeReader.current?.reset();
+        stopCamera();
+        setScanStatus({ type: 'success', msg: `✅ สแกนสำเร็จ! เจอ ${scannedFood.name} และครบภารกิจแล้ว` });
+      } else {
+        setScanStatus({ type: 'success', msg: `✅ สแกนสำเร็จ! เจอ ${scannedFood.name}` });
+      }
       setShowVideoModal({ ...scannedFood, details });
     } catch (err) {
       console.error('processBarcode error:', err);
@@ -1297,6 +1318,7 @@ export default function GameMain() {
 
     setPlayerId(nextPlayerId);
     finishRequestedRef.current = false;
+    finalSummarySavedRef.current = false;
     await preloadFoodsForRoom(currentRoomData);
 
     await setDoc(doc(db, 'rooms', roomCode, 'players', nextPlayerId), {
@@ -1340,7 +1362,19 @@ export default function GameMain() {
     setBarcodeInput('');
 
     window.setTimeout(() => {
+      const latestRoom = latestState.current.roomData || {};
+      const latestTargetItems = Math.max(1, Number(latestRoom.itemLimit || latestRoom.foodLimit || 5));
+      const latestScannedItems = Number(latestState.current.scannedItems || 0);
+
       isProcessingScan.current = false;
+
+      if (latestScannedItems >= latestTargetItems) {
+        codeReader.current?.reset();
+        stopCamera();
+        setScanStatus({ type: 'success', msg: 'ภารกิจครบแล้ว ระบบปิดกล้องและรอสรุปผลจากครู' });
+        return;
+      }
+
       setScanStatus({ type: '', msg: '' });
     }, 900);
   };
@@ -1351,6 +1385,58 @@ export default function GameMain() {
     return `${m}:${s}`;
   };
 
+  useEffect(() => {
+    if (step !== 'summary' || !roomCode || !playerId || finalSummarySavedRef.current) return;
+
+    finalSummarySavedRef.current = true;
+    const finalTargetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
+    const finalScorePackage = buildPlayerScore({
+      scoreSum,
+      itemsScanned: scannedItems,
+      itemLimit: finalTargetItems,
+      timeUsed,
+    });
+
+    setDoc(
+      doc(db, 'rooms', roomCode, 'players', playerId),
+      {
+        name: playerInfo.name.trim(),
+        avatar: playerInfo.avatar?.icon || '',
+        score: Number(finalScorePackage.rankingScore.toFixed(3)),
+        rankingScore: Number(finalScorePackage.rankingScore.toFixed(3)),
+        scoreSum: Number(finalScorePackage.scoreSum.toFixed(3)),
+        averageScore: Number(finalScorePackage.averageScore.toFixed(3)),
+        speedBonus: Number(finalScorePackage.speedBonus.toFixed(3)),
+        targetItems: finalScorePackage.targetItems,
+        completionRate: Number(finalScorePackage.completionRate.toFixed(3)),
+        missionCompleted: finalScorePackage.missionCompleted,
+        overallLevelTitle: finalScorePackage.overallLevel.title,
+        overallLevelTitleEn: finalScorePackage.overallLevel.titleEn,
+        overallLevelColor: finalScorePackage.overallLevel.colorName,
+        speedLevelTitle: finalScorePackage.speedLevel.title,
+        speedLevelTitleEn: finalScorePackage.speedLevel.titleEn,
+        speedAvgSeconds: Number((finalScorePackage.speedLevel.avgSeconds || 0).toFixed(2)),
+        finishedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    ).catch((err) => {
+      console.warn('Unable to save final player summary:', err);
+      finalSummarySavedRef.current = false;
+    });
+  }, [step, roomCode, playerId, roomData, playerInfo.name, playerInfo.avatar, scoreSum, scannedItems, timeUsed]);
+
+  const targetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
+  const summaryScore = buildPlayerScore({
+    scoreSum,
+    itemsScanned: scannedItems,
+    itemLimit: targetItems,
+    timeUsed,
+  });
+  const summaryLevel = summaryScore.overallLevel;
+  const summarySpeedLevel = summaryScore.speedLevel;
+  const completionPercent = Math.round(summaryScore.completionRate * 100);
+
   return (
     <div className="min-h-screen bg-[#0a192f] text-white font-sans relative overflow-hidden flex flex-col">
       <style>{`
@@ -1358,6 +1444,19 @@ export default function GameMain() {
           0% { transform: translateY(0); }
           50% { transform: translateY(160px); }
           100% { transform: translateY(0); }
+        }
+        @keyframes agentFloat {
+          0%, 100% { transform: translateY(0) rotate(-3deg); }
+          50% { transform: translateY(-14px) rotate(3deg); }
+        }
+        @keyframes sparkleSpin {
+          0% { transform: rotate(0deg) scale(1); opacity: 0.55; }
+          50% { transform: rotate(180deg) scale(1.16); opacity: 1; }
+          100% { transform: rotate(360deg) scale(1); opacity: 0.55; }
+        }
+        @keyframes progressGlow {
+          0%, 100% { box-shadow: 0 0 0 rgba(34,197,94,0.0); }
+          50% { box-shadow: 0 0 30px rgba(34,197,94,0.45); }
         }
       `}</style>
 
@@ -1612,65 +1711,103 @@ export default function GameMain() {
             </div>
 
             <div className="flex-1 bg-[#0a192f] border-2 border-cyan-500/50 rounded-3xl overflow-hidden flex flex-col items-center justify-center p-4 mb-4 relative shadow-[0_0_30px_rgba(6,182,212,0.2)]">
-              <div className="w-full aspect-[3/4] sm:aspect-video border-4 border-cyan-500/70 rounded-2xl flex flex-col items-center justify-center mb-2 relative overflow-hidden bg-black">
-                {cameraError ? (
-                  <div className="text-center p-4 relative z-10">
-                    <Camera className="w-16 h-16 text-rose-500/50 mx-auto mb-2" />
-                    <p className="text-rose-400 text-sm font-bold">{cameraError}</p>
+              {missionCompletedOnClient ? (
+                <div className="w-full aspect-[3/4] sm:aspect-video border-4 border-emerald-400/70 rounded-3xl flex flex-col items-center justify-center mb-4 relative overflow-hidden bg-gradient-to-br from-emerald-950 via-cyan-950 to-blue-950 p-6 text-center" style={{ animation: 'progressGlow 2.6s ease-in-out infinite' }}>
+                  <div className="absolute inset-0 opacity-25 pointer-events-none">
+                    <div className="absolute -top-10 -left-10 text-7xl" style={{ animation: 'sparkleSpin 6s linear infinite' }}>✨</div>
+                    <div className="absolute top-8 right-8 text-5xl" style={{ animation: 'sparkleSpin 5s linear infinite reverse' }}>⭐</div>
+                    <div className="absolute bottom-8 left-10 text-5xl" style={{ animation: 'sparkleSpin 7s linear infinite' }}>🟢</div>
+                    <div className="absolute -bottom-8 -right-8 text-8xl opacity-70" style={{ animation: 'sparkleSpin 8s linear infinite reverse' }}>🥦</div>
                   </div>
-                ) : (
-                  <video
-                    ref={videoRef}
-                    muted
-                    playsInline
-                    className={`w-full h-full object-cover ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
-                  ></video>
-                )}
 
-                {!cameraError && (
-                  <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center">
-                    <div className="w-[72%] max-w-[320px] aspect-square border-[5px] border-cyan-400/90 rounded-2xl relative shadow-[0_0_0_9999px_rgba(0,0,0,0.52)]">
-                      <div className="absolute top-1/2 left-0 w-full h-[3px] bg-red-500 shadow-[0_0_18px_#ef4444] animate-[scan_2s_ease-in-out_infinite]"></div>
-                      <div className="absolute -top-8 left-0 right-0 text-center text-xs font-black text-cyan-200">
-                        วาง QR Code ให้อยู่ในกรอบนี้
+                  <div className="relative z-10 flex flex-col items-center">
+                    <div className="w-32 h-32 rounded-full bg-white/95 border-8 border-emerald-300 shadow-[0_0_35px_rgba(16,185,129,0.55)] flex items-center justify-center text-7xl mb-5" style={{ animation: 'agentFloat 2.3s ease-in-out infinite' }}>
+                      {playerInfo.avatar?.icon || '🕵️'}
+                    </div>
+                    <div className="inline-flex items-center gap-2 rounded-full bg-emerald-400/20 border border-emerald-300/60 px-5 py-2 text-emerald-100 font-black text-sm mb-4">
+                      ✅ สแกนครบตามภารกิจแล้ว
+                    </div>
+                    <h2 className="text-2xl md:text-3xl font-black text-white mb-2">
+                      กำลังเตรียมผลสรุปภารกิจ
+                    </h2>
+                    <p className="text-sm md:text-base font-bold text-cyan-100 leading-relaxed max-w-sm">
+                      ระบบปิดกล้องแล้ว เพื่อประหยัดแบตเตอรี่และรอครูปิดห้อง/หมดเวลา จากนั้นจะแสดงหน้าสรุปคะแนนอัตโนมัติ
+                    </p>
+                    <div className="mt-5 grid grid-cols-2 gap-3 w-full max-w-xs">
+                      <div className="rounded-2xl bg-black/25 border border-white/10 p-3">
+                        <div className="text-xs text-cyan-200 font-bold">จำนวนที่สแกน</div>
+                        <div className="text-2xl font-black text-white">{scannedItems}/{currentTargetItems}</div>
+                      </div>
+                      <div className="rounded-2xl bg-black/25 border border-white/10 p-3">
+                        <div className="text-xs text-cyan-200 font-bold">เหลือเวลา</div>
+                        <div className="text-2xl font-black text-amber-300">{formatTime(timeRemaining || 0)}</div>
                       </div>
                     </div>
                   </div>
-                )}
-
-                {!cameraError && (
-                  <div className="absolute bottom-4 right-4 z-20 flex gap-2">
-                    <button
-                      type="button"
-                      onClick={toggleCamera}
-                      className="bg-cyan-600/85 p-3 rounded-full hover:bg-cyan-500 backdrop-blur-sm border border-cyan-400/50 shadow-lg"
-                      title="สลับกล้องหน้า/หลัง"
-                    >
-                      <RefreshCcw size={24} className="text-white" />
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {!cameraError && (
-                <div className="text-center mb-4 min-h-[40px] flex flex-col items-center justify-center gap-2 px-4">
-                  <p className="text-sm font-black text-cyan-300 bg-cyan-900/50 px-5 py-2 rounded-full border border-cyan-500/50 transition-opacity duration-300">
-                    {scanHint}
-                  </p>
-                  <p className={`text-[11px] font-black px-4 py-1 rounded-full border ${
-                    foodIndexStatus.state === 'ready'
-                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30'
-                      : foodIndexStatus.state === 'loading'
-                        ? 'bg-amber-500/15 text-amber-300 border-amber-400/30'
-                        : 'bg-slate-500/15 text-slate-300 border-slate-400/20'
-                  }`}>
-                    {foodIndexStatus.state === 'loading'
-                      ? '⚡ กำลังเตรียมฐานอาหารสำหรับสแกนเร็ว...'
-                      : foodIndexStatus.count > 0
-                        ? `⚡ โหมดสแกนเร็วพร้อม: ${foodIndexStatus.count} รายการ`
-                        : '⚡ โหมดสแกนเร็วพร้อมค้นหา'}
-                  </p>
                 </div>
+              ) : (
+                <>
+                  <div className="w-full aspect-[3/4] sm:aspect-video border-4 border-cyan-500/70 rounded-2xl flex flex-col items-center justify-center mb-2 relative overflow-hidden bg-black">
+                    {cameraError ? (
+                      <div className="text-center p-4 relative z-10">
+                        <Camera className="w-16 h-16 text-rose-500/50 mx-auto mb-2" />
+                        <p className="text-rose-400 text-sm font-bold">{cameraError}</p>
+                      </div>
+                    ) : (
+                      <video
+                        ref={videoRef}
+                        muted
+                        playsInline
+                        className={`w-full h-full object-cover ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
+                      ></video>
+                    )}
+
+                    {!cameraError && (
+                      <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center">
+                        <div className="w-[72%] max-w-[320px] aspect-square border-[5px] border-cyan-400/90 rounded-2xl relative shadow-[0_0_0_9999px_rgba(0,0,0,0.52)]">
+                          <div className="absolute top-1/2 left-0 w-full h-[3px] bg-red-500 shadow-[0_0_18px_#ef4444] animate-[scan_2s_ease-in-out_infinite]"></div>
+                          <div className="absolute -top-8 left-0 right-0 text-center text-xs font-black text-cyan-200">
+                            วาง QR Code ให้อยู่ในกรอบนี้
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {!cameraError && (
+                      <div className="absolute bottom-4 right-4 z-20 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={toggleCamera}
+                          className="bg-cyan-600/85 p-3 rounded-full hover:bg-cyan-500 backdrop-blur-sm border border-cyan-400/50 shadow-lg"
+                          title="สลับกล้องหน้า/หลัง"
+                        >
+                          <RefreshCcw size={24} className="text-white" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {!cameraError && (
+                    <div className="text-center mb-4 min-h-[40px] flex flex-col items-center justify-center gap-2 px-4">
+                      <p className="text-sm font-black text-cyan-300 bg-cyan-900/50 px-5 py-2 rounded-full border border-cyan-500/50 transition-opacity duration-300">
+                        {scanHint}
+                      </p>
+                      <p className={`text-[11px] font-black px-4 py-1 rounded-full border ${
+                        foodIndexStatus.state === 'ready'
+                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30'
+                          : foodIndexStatus.state === 'loading'
+                            ? 'bg-amber-500/15 text-amber-300 border-amber-400/30'
+                            : 'bg-slate-500/15 text-slate-300 border-slate-400/20'
+                      }`}>
+                        {foodIndexStatus.state === 'loading'
+                          ? '⚡ กำลังเตรียมฐานอาหารสำหรับสแกนเร็ว...'
+                          : foodIndexStatus.count > 0
+                            ? `⚡ โหมดสแกนเร็วพร้อม: ${foodIndexStatus.count} รายการ`
+                            : '⚡ โหมดสแกนเร็วพร้อมค้นหา'}
+                      </p>
+                    </div>
+                  )}
+                </>
               )}
 
               {scanStatus.msg && (
@@ -1687,69 +1824,179 @@ export default function GameMain() {
                 </div>
               )}
 
-              <form
-                onSubmit={handleManualScanSubmit}
-                className="w-full bg-[#112240] p-4 rounded-2xl border border-cyan-900/50 relative z-10"
-              >
-                <label className="block text-xs font-black text-cyan-400 mb-2 text-center">
-                  สแกน QR ไม่ติด? กรอกเลขบาร์โค้ดเองได้เลย
-                </label>
+              {!missionCompletedOnClient && (
+                <form
+                  onSubmit={handleManualScanSubmit}
+                  className="w-full bg-[#112240] p-4 rounded-2xl border border-cyan-900/50 relative z-10"
+                >
+                  <label className="block text-xs font-black text-cyan-400 mb-2 text-center">
+                    สแกน QR ไม่ติด? กรอกเลขบาร์โค้ดเองได้เลย
+                  </label>
 
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={barcodeInput}
-                    onChange={(e) => setBarcodeInput(e.target.value)}
-                    placeholder="เช่น 8850002"
-                    className="flex-1 px-4 py-3 rounded-xl bg-[#0a192f] border border-cyan-700 focus:border-cyan-400 text-white font-bold outline-none text-center"
-                  />
-                  <button type="submit" className="bg-cyan-600 hover:bg-cyan-500 p-3 rounded-xl">
-                    <Send size={24} />
-                  </button>
-                </div>
-              </form>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={barcodeInput}
+                      onChange={(e) => setBarcodeInput(e.target.value)}
+                      placeholder="เช่น 8850002"
+                      className="flex-1 px-4 py-3 rounded-xl bg-[#0a192f] border border-cyan-700 focus:border-cyan-400 text-white font-bold outline-none text-center"
+                    />
+                    <button type="submit" className="bg-cyan-600 hover:bg-cyan-500 p-3 rounded-xl">
+                      <Send size={24} />
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
 
-            {scannedItems >= roomData?.itemLimit && (
+            {missionCompletedOnClient && (
               <div className="bg-green-600 text-white font-black text-center py-3 rounded-xl animate-pulse">
-                ภารกิจเสร็จสิ้น! รอครูปิดห้อง
+                ภารกิจเสร็จสิ้น! ปิดกล้องแล้ว รอครูปิดห้องหรือหมดเวลา
               </div>
             )}
           </div>
         )}
 
         {step === 'summary' && (
-          <div className="w-full max-w-lg text-center animate-in zoom-in duration-500">
+          <div className="w-full max-w-3xl text-center animate-in zoom-in duration-500">
             <Trophy className="w-24 h-24 text-amber-400 mx-auto mb-6 drop-shadow-[0_0_20px_rgba(245,158,11,0.6)]" />
-            <h1 className="text-5xl font-black text-amber-400 uppercase tracking-widest mb-2">จบภารกิจ</h1>
+            <h1 className="text-4xl md:text-5xl font-black text-amber-400 uppercase tracking-widest mb-2">
+              จบภารกิจ
+            </h1>
             {getRoomSchoolName(roomData) && (
               <div className="mt-3 inline-flex rounded-full border border-lime-300/30 bg-lime-300/10 px-5 py-2 text-sm font-black text-lime-200">
                 ผลภารกิจของ {getRoomSchoolName(roomData)}
               </div>
             )}
 
-            <div className="bg-[#112240]/90 border-2 border-cyan-500/50 rounded-3xl p-8 my-8 shadow-[0_0_30px_rgba(6,182,212,0.2)]">
-              <div className="text-sm font-black text-cyan-400 uppercase tracking-widest mb-2">
-                คะแนนรวมจัดลำดับ
-              </div>
-              <div className="text-6xl font-black text-white mb-2">{score.toFixed(3)}</div>
-              <div className="text-sm font-bold text-amber-400 mb-6 bg-amber-500/10 inline-block px-4 py-1 rounded-full border border-amber-500/30">
-                + โบนัสความเร็ว: {speedBonus > 0 ? speedBonus.toFixed(3) : '0.000'}
+            <div className="bg-[#112240]/90 border-2 border-cyan-500/50 rounded-[2rem] p-6 md:p-8 my-8 shadow-[0_0_30px_rgba(6,182,212,0.2)] text-left">
+              <div className="flex flex-col md:flex-row items-center gap-5 text-center md:text-left mb-6">
+                <div className="w-24 h-24 rounded-full bg-blue-900/60 border-4 border-cyan-400/50 flex items-center justify-center text-6xl shadow-[0_0_25px_rgba(6,182,212,0.25)]">
+                  {playerInfo.avatar?.icon || '🕵️'}
+                </div>
+                <div className="flex-1">
+                  <div className="text-xs font-black text-cyan-300 uppercase tracking-[0.25em] mb-1">
+                    Agent Name
+                  </div>
+                  <h2 className="text-3xl font-black text-white">{playerInfo.name || 'สายลับ'}</h2>
+                  <p className="text-sm font-bold text-slate-400 mt-1">
+                    รหัสรอบการเล่น: <span className="text-slate-200">{playerId || '-'}</span>
+                  </p>
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 text-left border-t border-cyan-900/50 pt-6">
-                <div className="bg-[#0a192f] p-4 rounded-2xl">
+              {!summaryScore.missionCompleted && (
+                <div className="mb-6 rounded-2xl border border-amber-400/50 bg-amber-500/10 p-4 text-center text-amber-200 font-bold">
+                  ⚠️ ยังสแกนไม่ครบตามโจทย์ คะแนนจัดอันดับจึงถูกถ่วงน้ำหนัก เพื่อให้ผู้ที่ทำภารกิจครบได้เปรียบตามกติกา
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                <div className="bg-[#0a192f] p-4 rounded-2xl border border-slate-700">
                   <div className="text-xs text-slate-400 uppercase tracking-widest">สแกนสำเร็จ</div>
-                  <div className="text-2xl font-black mt-1">
-                    {scannedItems} <span className="text-sm font-normal text-slate-500">ชิ้น</span>
+                  <div className="text-2xl font-black mt-1 text-white">
+                    {summaryScore.itemsScanned}/{summaryScore.targetItems}
+                    <span className="text-sm font-normal text-slate-500"> ชิ้น</span>
                   </div>
                 </div>
-
-                <div className="bg-[#0a192f] p-4 rounded-2xl">
+                <div className="bg-[#0a192f] p-4 rounded-2xl border border-slate-700">
+                  <div className="text-xs text-slate-400 uppercase tracking-widest">ความครบถ้วน</div>
+                  <div className="text-2xl font-black mt-1 text-cyan-300">{completionPercent}%</div>
+                </div>
+                <div className="bg-[#0a192f] p-4 rounded-2xl border border-slate-700">
                   <div className="text-xs text-slate-400 uppercase tracking-widest">เวลาที่ใช้</div>
-                  <div className="text-2xl font-black mt-1">
-                    {formatTime(timeUsed)} <span className="text-sm font-normal text-slate-500">นาที</span>
+                  <div className="text-2xl font-black mt-1 text-white">{formatTime(timeUsed)}</div>
+                </div>
+                <div className="bg-[#0a192f] p-4 rounded-2xl border border-slate-700">
+                  <div className="text-xs text-slate-400 uppercase tracking-widest">เฉลี่ย/ชิ้น</div>
+                  <div className="text-2xl font-black mt-1 text-white">
+                    {summarySpeedLevel.avgSeconds ? summarySpeedLevel.avgSeconds.toFixed(1) : '0.0'}
+                    <span className="text-sm font-normal text-slate-500"> วิ</span>
                   </div>
+                </div>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-4 mb-6">
+                <div className={`rounded-3xl border-2 ${summaryLevel.borderClass} bg-[#0a192f] p-5`}>
+                  <div className="text-xs font-black text-slate-400 uppercase tracking-[0.25em] mb-2">
+                    คะแนนภาพรวม
+                  </div>
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="text-5xl font-black text-white">
+                      {summaryScore.averageScore.toFixed(2)}
+                      <span className="text-lg text-slate-500">/5</span>
+                    </div>
+                    <div className={`rounded-2xl bg-gradient-to-r ${summaryLevel.badgeClass} px-4 py-3 text-3xl shadow-lg`}>
+                      {summaryLevel.icon}
+                    </div>
+                  </div>
+                  <h3 className={`text-2xl font-black ${summaryLevel.textClass}`}>{summaryLevel.title}</h3>
+                  <div className="text-sm font-black text-white mt-1">({summaryLevel.titleEn})</div>
+                  <div className="mt-3 text-sm font-bold text-slate-300">{summaryLevel.colorName}</div>
+                  <p className="mt-3 text-sm leading-relaxed text-slate-300">{summaryLevel.note}</p>
+                </div>
+
+                <div className="rounded-3xl border-2 border-amber-400/60 bg-[#0a192f] p-5">
+                  <div className="text-xs font-black text-slate-400 uppercase tracking-[0.25em] mb-2">
+                    ระดับความเร็ว
+                  </div>
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="text-5xl font-black text-white">
+                      {summarySpeedLevel.icon}
+                    </div>
+                    <div className="rounded-2xl bg-amber-500/10 border border-amber-400/40 px-4 py-2 text-right">
+                      <div className="text-xs text-amber-200 font-black">โบนัส</div>
+                      <div className="text-2xl text-amber-300 font-black">
+                        +{Number(summaryScore.speedBonus || 0).toFixed(3)}
+                      </div>
+                    </div>
+                  </div>
+                  <h3 className="text-2xl font-black text-amber-300">{summarySpeedLevel.title}</h3>
+                  <div className="text-sm font-black text-white mt-1">({summarySpeedLevel.titleEn})</div>
+                  <p className="mt-3 text-sm leading-relaxed text-slate-300">{summarySpeedLevel.note}</p>
+                </div>
+              </div>
+
+              <div className="rounded-3xl bg-gradient-to-r from-cyan-500/20 to-blue-600/20 border border-cyan-400/40 p-5 text-center mb-6">
+                <div className="text-sm font-black text-cyan-200 uppercase tracking-[0.25em] mb-2">
+                  คะแนนจัดอันดับ Leaderboard
+                </div>
+                <div className="text-6xl font-black text-white mb-2">
+                  {summaryScore.rankingScore.toFixed(3)}
+                </div>
+                <div className="text-sm font-bold text-slate-300">
+                  {summaryScore.missionCompleted
+                    ? 'สแกนครบแล้ว ใช้คะแนนเฉลี่ยรวมกับโบนัสความเร็วในการจัดอันดับ'
+                    : 'ยังไม่ครบภารกิจ ระบบถ่วงคะแนนตามจำนวนชิ้นที่สแกนได้'}
+                </div>
+              </div>
+
+              <div className="rounded-3xl bg-[#0a192f] border border-slate-700 p-5">
+                <h3 className="text-lg font-black text-cyan-300 mb-4 text-center">
+                  เกณฑ์ผลสรุปคะแนนภาพรวม
+                </h3>
+                <div className="space-y-2">
+                  {OVERALL_LEVELS.map((level) => (
+                    <div
+                      key={level.titleEn}
+                      className="grid grid-cols-[6rem_1fr] md:grid-cols-[7rem_1fr_12rem] gap-3 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-sm"
+                    >
+                      <div className="font-black text-white">
+                        {level.min === 0
+                          ? 'ต่ำกว่า 2.5'
+                          : level.min === 4.5
+                            ? '4.5-5.0'
+                            : level.min === 3.5
+                              ? '3.5-4.4'
+                              : '2.5-3.4'}
+                      </div>
+                      <div>
+                        <div className="font-black text-white">{level.title}</div>
+                        <div className="font-bold text-slate-400">({level.titleEn})</div>
+                      </div>
+                      <div className="hidden md:block font-bold text-slate-300">{level.icon} {level.colorName}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
