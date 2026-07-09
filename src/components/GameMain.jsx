@@ -1497,6 +1497,17 @@ export default function GameMain() {
     return `${m}:${s}`;
   };
 
+  const targetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
+  const summaryScore = buildPlayerScore({
+    scoreSum,
+    itemsScanned: scannedItems,
+    itemLimit: targetItems,
+    timeUsed,
+  });
+  const summaryLevel = summaryScore.overallLevel;
+  const summarySpeedLevel = summaryScore.speedLevel;
+  const completionPercent = Math.round(summaryScore.completionRate * 100);
+
   useEffect(() => {
     if (step !== 'summary' || !roomCode || !playerId || finalSummarySavedRef.current) return;
 
@@ -1520,17 +1531,6 @@ export default function GameMain() {
       });
     });
   }, [step, roomCode, playerId, roomData, playerInfo.name, scoreSum, scannedItems, timeUsed, scannedBarcodes, targetItems]);
-
-  const targetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
-  const summaryScore = buildPlayerScore({
-    scoreSum,
-    itemsScanned: scannedItems,
-    itemLimit: targetItems,
-    timeUsed,
-  });
-  const summaryLevel = summaryScore.overallLevel;
-  const summarySpeedLevel = summaryScore.speedLevel;
-  const completionPercent = Math.round(summaryScore.completionRate * 100);
 
   return (
     <div className="min-h-screen bg-[#0a192f] text-white font-sans relative overflow-hidden flex flex-col">
