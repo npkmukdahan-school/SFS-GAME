@@ -281,13 +281,25 @@ const safeDocId = (value) =>
     .replace(/\s+/g, '_')
     .slice(0, 80) || `player_${Date.now()}`;
 
-const createPlayerSessionId = (name) => {
-  const baseName = safeDocId(name || 'player');
-  const randomPart =
-    globalThis.crypto?.randomUUID?.().replace(/-/g, '').slice(0, 10) ||
-    Math.random().toString(36).slice(2, 12);
+const createPlayerSessionId = (name) =>
+  `${safeDocId(name)}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-  return `${baseName}_${Date.now()}_${randomPart}`.slice(0, 160);
+const putFoodInIndex = (targetMap, food, { scope = 'global', docId = '' } = {}) => {
+  if (!food || !targetMap) return;
+
+  const normalizedBarcode = normalizeBarcode(food.barcode);
+  const normalizedDocId = normalizeBarcode(docId || food.id);
+
+  if (normalizedBarcode) {
+    targetMap.set(`${scope}:barcode:${normalizedBarcode}`, food);
+    // key แบบสั้นสำหรับกรณีใช้ scope เดียวกันในห้อง
+    targetMap.set(`barcode:${normalizedBarcode}`, food);
+  }
+
+  if (normalizedDocId) {
+    targetMap.set(`${scope}:id:${normalizedDocId}`, food);
+    targetMap.set(`id:${normalizedDocId}`, food);
+  }
 };
 
 const normalizeFoodDoc = (rawFood, barcode) => {
@@ -514,8 +526,16 @@ export default function GameMain() {
   const finishRequestedRef = useRef(false);
   const lastScanRef = useRef({ code: '', time: 0 });
   const foodCacheRef = useRef(new Map());
+  const foodIndexRef = useRef(new Map());
+  const foodPreloadKeyRef = useRef('');
+  const foodPreloadPromiseRef = useRef(null);
   const scannedBarcodeSetRef = useRef(new Set());
 
+  const [foodIndexStatus, setFoodIndexStatus] = useState({
+    state: 'idle',
+    count: 0,
+    msg: '',
+  });
   const [cameraError, setCameraError] = useState('');
   const [facingMode, setFacingMode] = useState('environment');
 
@@ -566,6 +586,7 @@ export default function GameMain() {
       if (docSnap.exists()) {
         const data = docSnap.data();
         setRoomData(data);
+        preloadFoodsForRoom(data);
 
         if (data.status === 'playing') {
           if (step === 'waiting') setStep('playing');
@@ -809,18 +830,116 @@ export default function GameMain() {
     }
   }
 
+  const getFoodFromIndex = (code, adminId = '') => {
+    const cleanCode = normalizeBarcode(code);
+    if (!cleanCode) return null;
+
+    const scope = adminId || 'global';
+    return (
+      foodIndexRef.current.get(`${scope}:barcode:${cleanCode}`) ||
+      foodIndexRef.current.get(`${scope}:id:${cleanCode}`) ||
+      foodIndexRef.current.get(`barcode:${cleanCode}`) ||
+      foodIndexRef.current.get(`id:${cleanCode}`) ||
+      null
+    );
+  };
+
+  async function preloadFoodsForRoom(room = latestState.current.roomData || {}) {
+    const adminId = room?.adminId || '';
+    const preloadKey = adminId ? `admin:${adminId}` : 'global';
+
+    if (foodPreloadKeyRef.current === preloadKey && foodIndexStatus.state === 'ready') {
+      return foodIndexStatus.count;
+    }
+
+    if (
+      foodPreloadPromiseRef.current?.key === preloadKey &&
+      foodPreloadPromiseRef.current?.promise
+    ) {
+      return foodPreloadPromiseRef.current.promise;
+    }
+
+    foodPreloadKeyRef.current = preloadKey;
+    setFoodIndexStatus({ state: 'loading', count: 0, msg: 'กำลังเตรียมฐานอาหารสำหรับสแกนเร็ว...' });
+
+    const preloadPromise = (async () => {
+      const nextIndex = new Map();
+      let loadedCount = 0;
+
+      try {
+        if (adminId) {
+          const adminFoodsSnap = await getDocs(collection(db, 'admins', adminId, 'foods'));
+          adminFoodsSnap.forEach((foodDoc) => {
+            const food = normalizeFoodDoc(
+              { id: foodDoc.id, ...foodDoc.data() },
+              foodDoc.data()?.barcode || foodDoc.id,
+            );
+            food.ownerAdminId = adminId;
+            putFoodInIndex(nextIndex, food, { scope: adminId, docId: foodDoc.id });
+            loadedCount += 1;
+          });
+        }
+
+        // fallback สำหรับห้องเก่าที่ยังไม่มี adminId หรือกรณี admin ยังไม่มีรายการอาหาร
+        if (!adminId || loadedCount === 0) {
+          const globalFoodsSnap = await getDocs(collection(db, 'foods'));
+          globalFoodsSnap.forEach((foodDoc) => {
+            const food = normalizeFoodDoc(
+              { id: foodDoc.id, ...foodDoc.data() },
+              foodDoc.data()?.barcode || foodDoc.id,
+            );
+            putFoodInIndex(nextIndex, food, { scope: 'global', docId: foodDoc.id });
+            loadedCount += 1;
+          });
+        }
+
+        foodIndexRef.current = nextIndex;
+        setFoodIndexStatus({
+          state: 'ready',
+          count: loadedCount,
+          msg: loadedCount > 0 ? `ฐานอาหารพร้อม ${loadedCount} รายการ` : 'ยังไม่พบฐานอาหารของห้องนี้',
+        });
+
+        return loadedCount;
+      } catch (err) {
+        console.warn('Unable to preload foods for fast scan:', err);
+        setFoodIndexStatus({
+          state: 'error',
+          count: 0,
+          msg: 'โหลดฐานอาหารล่วงหน้าไม่สำเร็จ ระบบจะค้นหาแบบสำรอง',
+        });
+        return 0;
+      }
+    })();
+
+    foodPreloadPromiseRef.current = { key: preloadKey, promise: preloadPromise };
+    return preloadPromise;
+  }
+
   async function findFoodByBarcode(code) {
     const cleanCode = normalizeBarcode(code);
     if (!cleanCode) return null;
 
     const currentRoomData = latestState.current.roomData || {};
     const adminId = currentRoomData.adminId || '';
-    const cacheKey = `${adminId || 'global'}:${cleanCode}`;
+    const scope = adminId || 'global';
+    const cacheKey = `${scope}:${cleanCode}`;
+
+    const indexedFood = getFoodFromIndex(cleanCode, adminId);
+    if (indexedFood) return indexedFood;
 
     if (foodCacheRef.current.has(cacheKey)) {
       return foodCacheRef.current.get(cacheKey);
     }
 
+    // ถ้ายังไม่ได้ preload ให้โหลดฐานอาหารทั้งชุดก่อน 1 ครั้ง แล้วค้นจาก memory อีกครั้ง
+    if (foodIndexStatus.state !== 'ready') {
+      await preloadFoodsForRoom(currentRoomData);
+      const indexedFoodAfterPreload = getFoodFromIndex(cleanCode, adminId);
+      if (indexedFoodAfterPreload) return indexedFoodAfterPreload;
+    }
+
+    // fallback แบบเร็ว: ยิง Firebase เฉพาะเอกสารตรง barcode ก่อน
     if (adminId) {
       const adminFoodDirectRef = doc(db, 'admins', adminId, 'foods', cleanCode);
       const adminFoodDirectSnap = await getDoc(adminFoodDirectRef);
@@ -832,9 +951,24 @@ export default function GameMain() {
         );
         food.ownerAdminId = adminId;
         foodCacheRef.current.set(cacheKey, food);
+        putFoodInIndex(foodIndexRef.current, food, { scope: adminId, docId: adminFoodDirectSnap.id });
         return food;
       }
+    }
 
+    // fallback สำหรับห้องเก่าที่ยังไม่มี adminId
+    const directRef = doc(db, 'foods', cleanCode);
+    const directSnap = await getDoc(directRef);
+
+    if (directSnap.exists()) {
+      const food = normalizeFoodDoc({ id: directSnap.id, ...directSnap.data() }, cleanCode);
+      foodCacheRef.current.set(cacheKey, food);
+      putFoodInIndex(foodIndexRef.current, food, { scope: 'global', docId: directSnap.id });
+      return food;
+    }
+
+    // fallback ชุดสุดท้าย: กรณี doc id ไม่ตรงกับ barcode แต่ field barcode ตรง
+    if (adminId) {
       const adminFoodQuery = query(
         collection(db, 'admins', adminId, 'foods'),
         where('barcode', '==', cleanCode),
@@ -847,18 +981,9 @@ export default function GameMain() {
         const food = normalizeFoodDoc({ id: foodDoc.id, ...foodDoc.data() }, cleanCode);
         food.ownerAdminId = adminId;
         foodCacheRef.current.set(cacheKey, food);
+        putFoodInIndex(foodIndexRef.current, food, { scope: adminId, docId: foodDoc.id });
         return food;
       }
-    }
-
-    // fallback สำหรับห้องเก่าที่ยังไม่มี adminId
-    const directRef = doc(db, 'foods', cleanCode);
-    const directSnap = await getDoc(directRef);
-
-    if (directSnap.exists()) {
-      const food = normalizeFoodDoc({ id: directSnap.id, ...directSnap.data() }, cleanCode);
-      foodCacheRef.current.set(cacheKey, food);
-      return food;
     }
 
     const foodQuery = query(
@@ -872,6 +997,7 @@ export default function GameMain() {
       const foodDoc = querySnap.docs[0];
       const food = normalizeFoodDoc({ id: foodDoc.id, ...foodDoc.data() }, cleanCode);
       foodCacheRef.current.set(cacheKey, food);
+      putFoodInIndex(foodIndexRef.current, food, { scope: 'global', docId: foodDoc.id });
       return food;
     }
 
@@ -917,29 +1043,21 @@ export default function GameMain() {
         playerRef,
         {
           name: playerName,
-          playerKey: safeDocId(playerName),
-          sessionId: playerDocId,
           avatar: playerInfo.avatar?.icon || '',
           score: Number(savedScorePackage.rankingScore.toFixed(3)),
           rankingScore: Number(savedScorePackage.rankingScore.toFixed(3)),
-          scoreSum: Number(savedScorePackage.scoreSum.toFixed(3)),
+          scoreSum: Number(newTotalScore.toFixed(3)),
           averageScore: Number(savedScorePackage.averageScore.toFixed(3)),
           speedBonus: Number(savedScorePackage.speedBonus.toFixed(3)),
+          targetItems: savedScorePackage.targetItems,
           completionRate: Number(savedScorePackage.completionRate.toFixed(3)),
           missionCompleted: savedScorePackage.missionCompleted,
-          targetItems: savedScorePackage.targetItems,
-          itemsScanned: savedScorePackage.itemsScanned,
           overallLevelTitle: savedScorePackage.overallLevel.title,
-          overallLevelTitleEn: savedScorePackage.overallLevel.titleEn,
-          overallLevelColor: savedScorePackage.overallLevel.colorName,
           speedLevelTitle: savedScorePackage.speedLevel.title,
-          speedLevelTitleEn: savedScorePackage.speedLevel.titleEn,
-          speedAvgSeconds: Number((savedScorePackage.speedLevel.avgSeconds || 0).toFixed(2)),
+          itemsScanned: newItemsCount,
           scannedBarcodes: arrayUnion(food.barcode),
           lastBarcode: food.barcode,
           lastFoodName: food.name,
-          lastFoodStars: Number(details.avgStars.toFixed(3)),
-          lastScanOrder: newItemsCount,
           updatedAt: serverTimestamp(),
         },
         { merge: true },
@@ -947,12 +1065,9 @@ export default function GameMain() {
 
       transaction.set(scanRef, {
         playerId: playerDocId,
-        sessionId: playerDocId,
-        playerKey: safeDocId(playerName),
         playerName,
         barcode: food.barcode,
         uniqueScanKey: `${playerDocId}_${food.barcode}`,
-        scanOrder: newItemsCount,
         foodId: food.id,
         foodName: food.name,
         category: food.category,
@@ -965,14 +1080,9 @@ export default function GameMain() {
         saltStars: details.saltStars,
         avgStars: Number(details.avgStars.toFixed(3)),
         statusLabel: details.status.label,
-        scoreSumAfterScan: Number(savedScorePackage.scoreSum.toFixed(3)),
+        scanOrder: newItemsCount,
+        scoreAfterScan: Number(savedScorePackage.rankingScore.toFixed(3)),
         averageScoreAfterScan: Number(savedScorePackage.averageScore.toFixed(3)),
-        rankingScoreAfterScan: Number(savedScorePackage.rankingScore.toFixed(3)),
-        completionRateAfterScan: Number(savedScorePackage.completionRate.toFixed(3)),
-        missionCompletedAfterScan: savedScorePackage.missionCompleted,
-        speedBonusAfterScan: Number(savedScorePackage.speedBonus.toFixed(3)),
-        timeUsedAtScan: Number(timeUsed || 0),
-        targetItems: savedScorePackage.targetItems,
         createdAt: serverTimestamp(),
       });
     });
@@ -1021,7 +1131,7 @@ export default function GameMain() {
     lastScanRef.current = { code: cleanCode, time: now };
     isProcessingScan.current = true;
     setBarcodeInput(cleanCode);
-    setScanStatus({ type: 'loading', msg: `กำลังตรวจสอบรหัส ${cleanCode} จากฐานข้อมูล...` });
+    setScanStatus({ type: 'loading', msg: `กำลังตรวจสอบรหัส ${cleanCode} แบบสแกนเร็ว...` });
 
     playBeep();
 
@@ -1038,12 +1148,7 @@ export default function GameMain() {
 
     try {
       const itemLimit = Number(curRoomData?.itemLimit || curRoomData?.foodLimit || 5);
-      const playerDocId = curPlayerId || safeDocId(playerName);
-      const playerRef = doc(db, 'rooms', curRoomCode, 'players', playerDocId);
-      const playerSnap = await getDoc(playerRef);
-      const firebaseScannedBarcodes = playerSnap.exists()
-        ? playerSnap.data().scannedBarcodes || []
-        : [];
+      const playerDocId = curPlayerId || createPlayerSessionId(playerName);
 
       if (curRoomData?.status === 'finished' || isRoomTimeExpired(curRoomData)) {
         await finishGameForPlayer('time_expired');
@@ -1057,14 +1162,11 @@ export default function GameMain() {
         return;
       }
 
-      const alreadyScanned = scannedBarcodeSetRef.current.has(cleanCode) ||
-        (curScannedBarcodes || []).map(normalizeBarcode).includes(cleanCode) ||
-        firebaseScannedBarcodes.map(normalizeBarcode).includes(cleanCode);
+      const alreadyScanned =
+        scannedBarcodeSetRef.current.has(cleanCode) ||
+        (curScannedBarcodes || []).map(normalizeBarcode).includes(cleanCode);
 
       if (alreadyScanned) {
-        setScannedBarcodes((prev) =>
-          Array.from(new Set([...prev, ...firebaseScannedBarcodes].map(normalizeBarcode))),
-        );
         setScanStatus({
           type: 'error',
           msg: `⚠️ รหัส ${cleanCode} ถูกสแกนแล้วในรอบนี้ กรุณาเลือกอาหาร/ขนมชิ้นอื่น`,
@@ -1170,8 +1272,10 @@ export default function GameMain() {
     const docSnap = await getDoc(docRef);
 
     if (docSnap.exists() && docSnap.data().status === 'waiting') {
+      const joinedRoomData = docSnap.data();
       setRoomCode(cleanRoomCode);
-      setRoomData(docSnap.data());
+      setRoomData(joinedRoomData);
+      preloadFoodsForRoom(joinedRoomData);
       setStep('select_avatar');
     } else {
       alert('ไม่พบห้อง หรือเกมเริ่มไปแล้ว!');
@@ -1181,37 +1285,35 @@ export default function GameMain() {
   const handleStartWait = async (e) => {
     e.preventDefault();
 
-    const playerName = playerInfo.name.trim();
-    if (!playerInfo.avatar || !playerName) {
+    if (!playerInfo.avatar || !playerInfo.name.trim()) {
       alert('กรุณาเลือกฮีโร่และตั้งชื่อ!');
       return;
     }
 
-    const playerKey = safeDocId(playerName);
-    const nextPlayerId = createPlayerSessionId(playerName);
-    const targetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
-    const timeLimitSeconds = getRoomTimeLimitSeconds(roomData);
+    const cleanPlayerName = playerInfo.name.trim();
+    const nextPlayerId = createPlayerSessionId(cleanPlayerName);
+    const playerKey = safeDocId(cleanPlayerName);
+    const currentRoomData = roomData || latestState.current.roomData || {};
 
     setPlayerId(nextPlayerId);
     finishRequestedRef.current = false;
+    await preloadFoodsForRoom(currentRoomData);
 
     await setDoc(doc(db, 'rooms', roomCode, 'players', nextPlayerId), {
-      name: playerName,
+      name: cleanPlayerName,
       playerKey,
       sessionId: nextPlayerId,
       roomCode,
-      schoolName: getRoomSchoolName(roomData),
+      schoolName: getRoomSchoolName(currentRoomData),
       avatar: playerInfo.avatar.icon,
-      avatarName: playerInfo.avatar.name,
       score: 0,
       rankingScore: 0,
       scoreSum: 0,
       averageScore: 0,
       speedBonus: 0,
+      targetItems: Number(currentRoomData?.itemLimit || currentRoomData?.foodLimit || 5),
       completionRate: 0,
       missionCompleted: false,
-      targetItems,
-      timeLimitSeconds,
       itemsScanned: 0,
       scannedBarcodes: [],
       joinedAt: serverTimestamp(),
@@ -1226,49 +1328,6 @@ export default function GameMain() {
     scannedBarcodeSetRef.current = new Set();
     setStep('waiting');
   };
-
-  useEffect(() => {
-    if (step !== 'summary' || !roomCode || !playerId) return;
-
-    const targetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
-    const finalScorePackage = buildPlayerScore({
-      scoreSum,
-      itemsScanned: scannedItems,
-      itemLimit: targetItems,
-      timeUsed,
-    });
-
-    setDoc(
-      doc(db, 'rooms', roomCode, 'players', playerId),
-      {
-        name: playerInfo.name.trim(),
-        playerKey: safeDocId(playerInfo.name),
-        sessionId: playerId,
-        roomCode,
-        schoolName: getRoomSchoolName(roomData),
-        score: Number(finalScorePackage.rankingScore.toFixed(3)),
-        rankingScore: Number(finalScorePackage.rankingScore.toFixed(3)),
-        scoreSum: Number(finalScorePackage.scoreSum.toFixed(3)),
-        averageScore: Number(finalScorePackage.averageScore.toFixed(3)),
-        speedBonus: Number(finalScorePackage.speedBonus.toFixed(3)),
-        completionRate: Number(finalScorePackage.completionRate.toFixed(3)),
-        missionCompleted: finalScorePackage.missionCompleted,
-        targetItems: finalScorePackage.targetItems,
-        itemsScanned: finalScorePackage.itemsScanned,
-        overallLevelTitle: finalScorePackage.overallLevel.title,
-        overallLevelTitleEn: finalScorePackage.overallLevel.titleEn,
-        overallLevelColor: finalScorePackage.overallLevel.colorName,
-        speedLevelTitle: finalScorePackage.speedLevel.title,
-        speedLevelTitleEn: finalScorePackage.speedLevel.titleEn,
-        speedAvgSeconds: Number((finalScorePackage.speedLevel.avgSeconds || 0).toFixed(2)),
-        finishedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    ).catch((err) => {
-      console.warn('Unable to save final player summary:', err);
-    });
-  }, [step, roomCode, playerId, roomData, playerInfo.name, scoreSum, scannedItems, timeUsed]);
 
   const handleManualScanSubmit = async (e) => {
     e.preventDefault();
@@ -1291,17 +1350,6 @@ export default function GameMain() {
     const s = (seconds % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
   };
-
-  const targetItems = Math.max(1, Number(roomData?.itemLimit || roomData?.foodLimit || 5));
-  const summaryScore = buildPlayerScore({
-    scoreSum,
-    itemsScanned: scannedItems,
-    itemLimit: targetItems,
-    timeUsed,
-  });
-  const summaryLevel = summaryScore.overallLevel;
-  const summarySpeedLevel = summaryScore.speedLevel;
-  const completionPercent = Math.round(summaryScore.completionRate * 100);
 
   return (
     <div className="min-h-screen bg-[#0a192f] text-white font-sans relative overflow-hidden flex flex-col">
@@ -1513,6 +1561,16 @@ export default function GameMain() {
                   <span>📦 เป้าหมายไอเทม:</span>
                   <span className="text-white">{roomData?.itemLimit} ชิ้น</span>
                 </li>
+                <li className="flex justify-between">
+                  <span>⚡ ฐานอาหาร:</span>
+                  <span className="text-cyan-300">
+                    {foodIndexStatus.state === 'loading'
+                      ? 'กำลังเตรียม...'
+                      : foodIndexStatus.count > 0
+                        ? `${foodIndexStatus.count} รายการ`
+                        : 'พร้อมค้นหา'}
+                  </span>
+                </li>
               </ul>
             </div>
 
@@ -1595,9 +1653,22 @@ export default function GameMain() {
               </div>
 
               {!cameraError && (
-                <div className="text-center mb-4 min-h-[40px] flex items-center justify-center px-4">
+                <div className="text-center mb-4 min-h-[40px] flex flex-col items-center justify-center gap-2 px-4">
                   <p className="text-sm font-black text-cyan-300 bg-cyan-900/50 px-5 py-2 rounded-full border border-cyan-500/50 transition-opacity duration-300">
                     {scanHint}
+                  </p>
+                  <p className={`text-[11px] font-black px-4 py-1 rounded-full border ${
+                    foodIndexStatus.state === 'ready'
+                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30'
+                      : foodIndexStatus.state === 'loading'
+                        ? 'bg-amber-500/15 text-amber-300 border-amber-400/30'
+                        : 'bg-slate-500/15 text-slate-300 border-slate-400/20'
+                  }`}>
+                    {foodIndexStatus.state === 'loading'
+                      ? '⚡ กำลังเตรียมฐานอาหารสำหรับสแกนเร็ว...'
+                      : foodIndexStatus.count > 0
+                        ? `⚡ โหมดสแกนเร็วพร้อม: ${foodIndexStatus.count} รายการ`
+                        : '⚡ โหมดสแกนเร็วพร้อมค้นหา'}
                   </p>
                 </div>
               )}
@@ -1648,145 +1719,37 @@ export default function GameMain() {
         )}
 
         {step === 'summary' && (
-          <div className="w-full max-w-3xl text-center animate-in zoom-in duration-500">
+          <div className="w-full max-w-lg text-center animate-in zoom-in duration-500">
             <Trophy className="w-24 h-24 text-amber-400 mx-auto mb-6 drop-shadow-[0_0_20px_rgba(245,158,11,0.6)]" />
-            <h1 className="text-4xl md:text-5xl font-black text-amber-400 uppercase tracking-widest mb-2">
-              จบภารกิจ
-            </h1>
+            <h1 className="text-5xl font-black text-amber-400 uppercase tracking-widest mb-2">จบภารกิจ</h1>
             {getRoomSchoolName(roomData) && (
               <div className="mt-3 inline-flex rounded-full border border-lime-300/30 bg-lime-300/10 px-5 py-2 text-sm font-black text-lime-200">
                 ผลภารกิจของ {getRoomSchoolName(roomData)}
               </div>
             )}
 
-            <div className="bg-[#112240]/90 border-2 border-cyan-500/50 rounded-[2rem] p-6 md:p-8 my-8 shadow-[0_0_30px_rgba(6,182,212,0.2)] text-left">
-              <div className="flex flex-col md:flex-row items-center gap-5 text-center md:text-left mb-6">
-                <div className="w-24 h-24 rounded-full bg-blue-900/60 border-4 border-cyan-400/50 flex items-center justify-center text-6xl shadow-[0_0_25px_rgba(6,182,212,0.25)]">
-                  {playerInfo.avatar?.icon || '🕵️'}
-                </div>
-                <div className="flex-1">
-                  <div className="text-xs font-black text-cyan-300 uppercase tracking-[0.25em] mb-1">
-                    Agent Name
-                  </div>
-                  <h2 className="text-3xl font-black text-white">{playerInfo.name || 'สายลับ'}</h2>
-                  <p className="text-sm font-bold text-slate-400 mt-1">
-                    รหัสรอบการเล่น: <span className="text-slate-200">{playerId || '-'}</span>
-                  </p>
-                </div>
+            <div className="bg-[#112240]/90 border-2 border-cyan-500/50 rounded-3xl p-8 my-8 shadow-[0_0_30px_rgba(6,182,212,0.2)]">
+              <div className="text-sm font-black text-cyan-400 uppercase tracking-widest mb-2">
+                คะแนนรวมจัดลำดับ
+              </div>
+              <div className="text-6xl font-black text-white mb-2">{score.toFixed(3)}</div>
+              <div className="text-sm font-bold text-amber-400 mb-6 bg-amber-500/10 inline-block px-4 py-1 rounded-full border border-amber-500/30">
+                + โบนัสความเร็ว: {speedBonus > 0 ? speedBonus.toFixed(3) : '0.000'}
               </div>
 
-              {!summaryScore.missionCompleted && (
-                <div className="mb-6 rounded-2xl border border-amber-400/50 bg-amber-500/10 p-4 text-center text-amber-200 font-bold">
-                  ⚠️ ยังสแกนไม่ครบตามโจทย์ คะแนนจัดอันดับจึงถูกถ่วงน้ำหนัก เพื่อให้ผู้ที่ทำภารกิจครบได้เปรียบตามกติกา
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-                <div className="bg-[#0a192f] p-4 rounded-2xl border border-slate-700">
+              <div className="grid grid-cols-2 gap-4 text-left border-t border-cyan-900/50 pt-6">
+                <div className="bg-[#0a192f] p-4 rounded-2xl">
                   <div className="text-xs text-slate-400 uppercase tracking-widest">สแกนสำเร็จ</div>
-                  <div className="text-2xl font-black mt-1 text-white">
-                    {summaryScore.itemsScanned}/{summaryScore.targetItems}
-                    <span className="text-sm font-normal text-slate-500"> ชิ้น</span>
+                  <div className="text-2xl font-black mt-1">
+                    {scannedItems} <span className="text-sm font-normal text-slate-500">ชิ้น</span>
                   </div>
                 </div>
-                <div className="bg-[#0a192f] p-4 rounded-2xl border border-slate-700">
-                  <div className="text-xs text-slate-400 uppercase tracking-widest">ความครบถ้วน</div>
-                  <div className="text-2xl font-black mt-1 text-cyan-300">{completionPercent}%</div>
-                </div>
-                <div className="bg-[#0a192f] p-4 rounded-2xl border border-slate-700">
+
+                <div className="bg-[#0a192f] p-4 rounded-2xl">
                   <div className="text-xs text-slate-400 uppercase tracking-widest">เวลาที่ใช้</div>
-                  <div className="text-2xl font-black mt-1 text-white">{formatTime(timeUsed)}</div>
-                </div>
-                <div className="bg-[#0a192f] p-4 rounded-2xl border border-slate-700">
-                  <div className="text-xs text-slate-400 uppercase tracking-widest">เฉลี่ย/ชิ้น</div>
-                  <div className="text-2xl font-black mt-1 text-white">
-                    {summarySpeedLevel.avgSeconds ? summarySpeedLevel.avgSeconds.toFixed(1) : '0.0'}
-                    <span className="text-sm font-normal text-slate-500"> วิ</span>
+                  <div className="text-2xl font-black mt-1">
+                    {formatTime(timeUsed)} <span className="text-sm font-normal text-slate-500">นาที</span>
                   </div>
-                </div>
-              </div>
-
-              <div className="grid md:grid-cols-2 gap-4 mb-6">
-                <div className={`rounded-3xl border-2 ${summaryLevel.borderClass} bg-[#0a192f] p-5`}>
-                  <div className="text-xs font-black text-slate-400 uppercase tracking-[0.25em] mb-2">
-                    คะแนนภาพรวม
-                  </div>
-                  <div className="flex items-center justify-between gap-3 mb-3">
-                    <div className="text-5xl font-black text-white">
-                      {summaryScore.averageScore.toFixed(2)}
-                      <span className="text-lg text-slate-500">/5</span>
-                    </div>
-                    <div className={`rounded-2xl bg-gradient-to-r ${summaryLevel.badgeClass} px-4 py-3 text-3xl shadow-lg`}>
-                      {summaryLevel.icon}
-                    </div>
-                  </div>
-                  <h3 className={`text-2xl font-black ${summaryLevel.textClass}`}>{summaryLevel.title}</h3>
-                  <div className="text-sm font-black text-white mt-1">({summaryLevel.titleEn})</div>
-                  <div className="mt-3 text-sm font-bold text-slate-300">{summaryLevel.colorName}</div>
-                  <p className="mt-3 text-sm leading-relaxed text-slate-300">{summaryLevel.note}</p>
-                </div>
-
-                <div className="rounded-3xl border-2 border-amber-400/60 bg-[#0a192f] p-5">
-                  <div className="text-xs font-black text-slate-400 uppercase tracking-[0.25em] mb-2">
-                    ระดับความเร็ว
-                  </div>
-                  <div className="flex items-center justify-between gap-3 mb-3">
-                    <div className="text-5xl font-black text-white">
-                      {summarySpeedLevel.icon}
-                    </div>
-                    <div className="rounded-2xl bg-amber-500/10 border border-amber-400/40 px-4 py-2 text-right">
-                      <div className="text-xs text-amber-200 font-black">โบนัส</div>
-                      <div className="text-2xl text-amber-300 font-black">
-                        +{Number(summaryScore.speedBonus || 0).toFixed(3)}
-                      </div>
-                    </div>
-                  </div>
-                  <h3 className="text-2xl font-black text-amber-300">{summarySpeedLevel.title}</h3>
-                  <div className="text-sm font-black text-white mt-1">({summarySpeedLevel.titleEn})</div>
-                  <p className="mt-3 text-sm leading-relaxed text-slate-300">{summarySpeedLevel.note}</p>
-                </div>
-              </div>
-
-              <div className="rounded-3xl bg-gradient-to-r from-cyan-500/20 to-blue-600/20 border border-cyan-400/40 p-5 text-center mb-6">
-                <div className="text-sm font-black text-cyan-200 uppercase tracking-[0.25em] mb-2">
-                  คะแนนจัดอันดับ Leaderboard
-                </div>
-                <div className="text-6xl font-black text-white mb-2">
-                  {summaryScore.rankingScore.toFixed(3)}
-                </div>
-                <div className="text-sm font-bold text-slate-300">
-                  {summaryScore.missionCompleted
-                    ? 'สแกนครบแล้ว ใช้คะแนนเฉลี่ยรวมกับโบนัสความเร็วในการจัดอันดับ'
-                    : 'ยังไม่ครบภารกิจ ระบบถ่วงคะแนนตามจำนวนชิ้นที่สแกนได้'}
-                </div>
-              </div>
-
-              <div className="rounded-3xl bg-[#0a192f] border border-slate-700 p-5">
-                <h3 className="text-lg font-black text-cyan-300 mb-4 text-center">
-                  เกณฑ์ผลสรุปคะแนนภาพรวม
-                </h3>
-                <div className="space-y-2">
-                  {OVERALL_LEVELS.map((level) => (
-                    <div
-                      key={level.titleEn}
-                      className="grid grid-cols-[6rem_1fr] md:grid-cols-[7rem_1fr_12rem] gap-3 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-sm"
-                    >
-                      <div className="font-black text-white">
-                        {level.min === 0
-                          ? 'ต่ำกว่า 2.5'
-                          : level.min === 4.5
-                            ? '4.5-5.0'
-                            : level.min === 3.5
-                              ? '3.5-4.4'
-                              : '2.5-3.4'}
-                      </div>
-                      <div>
-                        <div className="font-black text-white">{level.title}</div>
-                        <div className="font-bold text-slate-400">({level.titleEn})</div>
-                      </div>
-                      <div className="hidden md:block font-bold text-slate-300">{level.icon} {level.colorName}</div>
-                    </div>
-                  ))}
                 </div>
               </div>
             </div>
