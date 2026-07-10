@@ -39,7 +39,7 @@ import {
 import { auth, db } from '../firebase';
 
 const PUBLIC_BASE_URL = import.meta.env.BASE_URL || '/';
-const GAME_LOGO_URL = `${PUBLIC_BASE_URL}sfs-game-logo.png`;
+const GAME_LOGO_URL = `${PUBLIC_BASE_URL}sfs_logo.png`;
 
 const emptyFoodForm = {
   barcode: '',
@@ -262,7 +262,7 @@ export default function AdminPortal() {
     };
 
     loadAdminProfile().catch((error) => {
-      setProfileError(`โหลดข้อมูล Admin ไม่ได้: ${error.message}`);
+      setProfileError(`โหลดข้อมูล ผู้ใช้ระบบ ไม่ได้: ${error.message}`);
     });
 
     return undefined;
@@ -359,7 +359,7 @@ export default function AdminPortal() {
           botCheck: '',
           website: '',
         });
-        setAuthMessage('สมัครสมาชิกสำเร็จแล้ว กรุณาเข้าสู่ระบบ Admin');
+        setAuthMessage('สมัครสมาชิกสำเร็จแล้ว กรุณาเข้าสู่ระบบ');
         const a = Math.floor(2 + Math.random() * 8);
         const b = Math.floor(2 + Math.random() * 8);
         setBotQuestion({ a, b, answer: a + b });
@@ -400,7 +400,7 @@ export default function AdminPortal() {
       const isEditingSameFood = editingFoodId && editingFoodId === barcode;
 
       if (adminFoodSnap.exists() && !isEditingSameFood) {
-        setFoodError(`รหัส ${barcode} มีอยู่ในฐานข้อมูลของ Admin นี้แล้ว กรุณาใช้รหัสอื่น`);
+        setFoodError(`รหัส ${barcode} มีอยู่ในฐานข้อมูลของ ระบบ นี้แล้ว กรุณาใช้รหัสอื่น`);
         setSaving(false);
         return;
       }
@@ -683,7 +683,7 @@ export default function AdminPortal() {
         <div className="w-full max-w-5xl grid lg:grid-cols-[0.9fr_1.1fr] gap-6 items-center">
           <div className="text-center lg:text-left">
             <img src={GAME_LOGO_URL} alt="SFS-GAME" className="w-56 mx-auto lg:mx-0 mb-5" />
-            <h1 className="text-4xl font-black mb-4">ระบบ Admin SFS-GAME</h1>
+            <h1 className="text-4xl font-black mb-4">ระบบ เกม SFS-GAME</h1>
             <p className="text-slate-300 font-semibold leading-relaxed">
               สมัครสมาชิกเพื่อสร้างฐานข้อมูลอาหาร เครื่องดื่ม ขนม และไอศกรีมของตนเอง
               จากนั้นสร้างห้องเกมให้นักเรียนสแกนจากฐานข้อมูลของ Admin คนนั้นโดยเฉพาะ
@@ -704,7 +704,7 @@ export default function AdminPortal() {
                 onClick={() => setMode('register')}
                 className={`flex-1 py-3 rounded-2xl font-black ${mode === 'register' ? 'bg-cyan-400 text-slate-950' : 'bg-white/10'}`}
               >
-                สมัคร Admin
+                สมัคร สมาชิก
               </button>
             </div>
 
@@ -770,7 +770,7 @@ export default function AdminPortal() {
             {authMessage && <div className="mb-4 bg-lime-300/15 text-lime-100 border border-lime-300/30 rounded-2xl p-3 font-bold">{authMessage}</div>}
 
             <button className="w-full bg-gradient-to-r from-lime-300 to-cyan-300 text-slate-950 font-black py-4 rounded-2xl">
-              {mode === 'register' ? 'สมัครสมาชิก Admin' : 'เข้าสู่ระบบ Admin'}
+              {mode === 'register' ? 'สมัครสมาชิก' : 'เข้าสู่ระบบ'}
             </button>
 
             <Link to="/" className="block text-center mt-5 text-slate-400 font-bold hover:text-white">กลับหน้าแรก</Link>
