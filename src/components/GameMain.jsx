@@ -313,6 +313,46 @@ const safeDocId = (value) =>
 const createPlayerSessionId = (name) =>
   `${safeDocId(name)}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
+const PLAYER_SESSION_STORAGE_PREFIX = 'sfs-game-player-session-v2';
+
+const getPlayerSessionStorageKey = (roomCode) =>
+  `${PLAYER_SESSION_STORAGE_PREFIX}:${safeDocId(roomCode)}`;
+
+const readStoredPlayerSession = (roomCode) => {
+  if (typeof window === 'undefined' || !roomCode) return null;
+
+  try {
+    const raw = window.sessionStorage.getItem(getPlayerSessionStorageKey(roomCode));
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    if (!parsed?.playerId) return null;
+
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const saveStoredPlayerSession = (roomCode, sessionData) => {
+  if (typeof window === 'undefined' || !roomCode || !sessionData?.playerId) return;
+
+  try {
+    window.sessionStorage.setItem(
+      getPlayerSessionStorageKey(roomCode),
+      JSON.stringify({
+        ...sessionData,
+        savedAt: Date.now(),
+      }),
+    );
+  } catch {
+    // sessionStorage อาจถูกปิดในบาง browser แต่เกมยังเล่นต่อได้
+  }
+};
+
+const isSamePlayerSession = (storedSession, playerName) =>
+  Boolean(storedSession?.playerId) && safeDocId(storedSession?.playerName || '') === safeDocId(playerName || '');
+
 const putFoodInIndex = (targetMap, food, { scope = 'global', docId = '' } = {}) => {
   if (!food || !targetMap) return;
 
@@ -517,6 +557,7 @@ function FoodVideoPlayer({ videoUrl }) {
 
 export default function GameMain() {
   const [step, setStep] = useState('enter_room');
+  const [isJoiningRoom, setIsJoiningRoom] = useState(false);
   const [roomCode, setRoomCode] = useState('');
   const [playerInfo, setPlayerInfo] = useState({ name: '', avatar: null });
   const [playerId, setPlayerId] = useState('');
@@ -1313,7 +1354,8 @@ export default function GameMain() {
 
     try {
       const itemLimit = clampTargetItems(curRoomData?.itemLimit || curRoomData?.foodLimit);
-      const playerDocId = curPlayerId || createPlayerSessionId(playerName);
+      const storedSession = readStoredPlayerSession(curRoomCode);
+      const playerDocId = curPlayerId || storedSession?.playerId || createPlayerSessionId(playerName);
 
       if (curRoomData?.status === 'finished' || isRoomTimeExpired(curRoomData)) {
         await finishGameForPlayer('time_expired');
@@ -1476,55 +1518,122 @@ export default function GameMain() {
   const handleStartWait = async (e) => {
     e.preventDefault();
 
+    if (isJoiningRoom) return;
+
     if (!playerInfo.avatar || !playerInfo.name.trim()) {
       alert('กรุณาเลือกฮีโร่และตั้งชื่อ!');
       return;
     }
 
     const cleanPlayerName = playerInfo.name.trim();
-    const nextPlayerId = createPlayerSessionId(cleanPlayerName);
+    const cleanRoomCode = roomCode.trim();
     const playerKey = safeDocId(cleanPlayerName);
     const currentRoomData = roomData || latestState.current.roomData || {};
 
-    setPlayerId(nextPlayerId);
-    finishRequestedRef.current = false;
-    finalSummarySavedRef.current = false;
-    await preloadFoodsForRoom(currentRoomData);
+    setIsJoiningRoom(true);
 
-    await setDoc(doc(db, 'rooms', roomCode, 'players', nextPlayerId), {
-      name: cleanPlayerName,
-      playerKey,
-      sessionId: nextPlayerId,
-      roomCode,
-      schoolName: getRoomSchoolName(currentRoomData),
-      adminId: currentRoomData?.adminId || '',
-      avatar: playerInfo.avatar.icon,
-      score: 0,
-      rankingScore: 0,
-      scoreSum: 0,
-      averageScore: 0,
-      speedBonus: 0,
-      targetItems: clampTargetItems(currentRoomData?.itemLimit || currentRoomData?.foodLimit),
-      completionRate: 0,
-      completionPercent: 0,
-      missionCompleted: false,
-      itemsScanned: 0,
-      scannedBarcodes: [],
-      lifecycleStatus: 'joined_waiting_start',
-      includeInReport: false,
-      isFinal: false,
-      reportReady: false,
-      joinedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    try {
+      const latestRoomSnap = await getDoc(doc(db, 'rooms', cleanRoomCode));
+      if (!latestRoomSnap.exists() || latestRoomSnap.data()?.status !== 'waiting') {
+        alert('ห้องนี้ไม่อยู่ในสถานะรอเข้าร่วมแล้ว กรุณาขอรหัสห้องใหม่จากครู');
+        return;
+      }
 
-    setScoreSum(0);
-    setScore(0);
-    setSpeedBonus(0);
-    setScannedItems(0);
-    setScannedBarcodes([]);
-    scannedBarcodeSetRef.current = new Set();
-    setStep('waiting');
+      const latestRoomData = latestRoomSnap.data();
+      setRoomData(latestRoomData);
+
+      const storedSession = readStoredPlayerSession(cleanRoomCode);
+      let nextPlayerId = isSamePlayerSession(storedSession, cleanPlayerName)
+        ? storedSession.playerId
+        : createPlayerSessionId(cleanPlayerName);
+
+      const playerRef = doc(db, 'rooms', cleanRoomCode, 'players', nextPlayerId);
+      const playerSnap = await getDoc(playerRef);
+
+      // ถ้ามี session เดิมของชื่อเดียวกันใน browser นี้ ให้กลับเข้า record เดิม
+      // ป้องกันการกดซ้ำ/รีเฟรช/ย้อนกลับแล้วเข้าห้องใหม่จนเกิดชื่อซ้ำหลายเอกสาร
+      // แต่ถ้าเอกสารเดิมถูกปิดรายงานแล้ว ให้สร้าง session ใหม่เพื่อเก็บประวัติรอบใหม่
+      if (playerSnap.exists() && playerSnap.data()?.isFinal) {
+        nextPlayerId = createPlayerSessionId(cleanPlayerName);
+      }
+
+      const activePlayerRef = doc(db, 'rooms', cleanRoomCode, 'players', nextPlayerId);
+      const activePlayerSnap = await getDoc(activePlayerRef);
+      const isExistingActiveSession = activePlayerSnap.exists() && !activePlayerSnap.data()?.isFinal;
+      const activePlayerData = activePlayerSnap.exists() ? activePlayerSnap.data() : {};
+
+      setPlayerId(nextPlayerId);
+      setRoomCode(cleanRoomCode);
+      setPlayerInfo((prev) => ({ ...prev, name: cleanPlayerName }));
+      finishRequestedRef.current = false;
+      finalSummarySavedRef.current = false;
+      await preloadFoodsForRoom(latestRoomData || currentRoomData);
+
+      const targetItems = clampTargetItems(latestRoomData?.itemLimit || latestRoomData?.foodLimit);
+      const existingScannedBarcodes = Array.isArray(activePlayerData.scannedBarcodes)
+        ? activePlayerData.scannedBarcodes.map(normalizeBarcode)
+        : [];
+      const existingItemsScanned = Number(activePlayerData.itemsScanned || 0);
+      const existingScoreSum = Number(activePlayerData.scoreSum || 0);
+      const existingTimeUsed = Number(activePlayerData.timeUsed || 0);
+      const existingScorePackage = buildPlayerScore({
+        scoreSum: existingScoreSum,
+        itemsScanned: existingItemsScanned,
+        itemLimit: targetItems,
+        timeUsed: existingTimeUsed,
+      });
+
+      await setDoc(
+        activePlayerRef,
+        {
+          name: cleanPlayerName,
+          playerKey,
+          sessionId: nextPlayerId,
+          roomCode: cleanRoomCode,
+          schoolName: getRoomSchoolName(latestRoomData || currentRoomData),
+          adminId: latestRoomData?.adminId || currentRoomData?.adminId || '',
+          avatar: playerInfo.avatar.icon,
+          score: Number((isExistingActiveSession ? existingScorePackage.rankingScore : 0).toFixed(3)),
+          rankingScore: Number((isExistingActiveSession ? existingScorePackage.rankingScore : 0).toFixed(3)),
+          scoreSum: Number((isExistingActiveSession ? existingScoreSum : 0).toFixed(3)),
+          averageScore: Number((isExistingActiveSession ? existingScorePackage.averageScore : 0).toFixed(3)),
+          speedBonus: Number((isExistingActiveSession ? existingScorePackage.speedBonus : 0).toFixed(3)),
+          targetItems,
+          completionRate: isExistingActiveSession ? existingScorePackage.completionRate : 0,
+          completionPercent: isExistingActiveSession ? Math.round(existingScorePackage.completionRate * 100) : 0,
+          missionCompleted: isExistingActiveSession ? existingScorePackage.missionCompleted : false,
+          itemsScanned: isExistingActiveSession ? existingItemsScanned : 0,
+          scannedBarcodes: isExistingActiveSession ? existingScannedBarcodes : [],
+          lifecycleStatus: isExistingActiveSession ? 'rejoined_waiting_session' : 'joined_waiting_start',
+          includeInReport: false,
+          isFinal: false,
+          reportReady: false,
+          joinedAt: isExistingActiveSession ? activePlayerData.joinedAt || serverTimestamp() : serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+
+      saveStoredPlayerSession(cleanRoomCode, {
+        playerId: nextPlayerId,
+        playerName: cleanPlayerName,
+        playerKey,
+        avatarId: playerInfo.avatar.id,
+      });
+
+      setScoreSum(isExistingActiveSession ? existingScoreSum : 0);
+      setScore(isExistingActiveSession ? existingScorePackage.rankingScore : 0);
+      setSpeedBonus(isExistingActiveSession ? existingScorePackage.speedBonus : 0);
+      setScannedItems(isExistingActiveSession ? existingItemsScanned : 0);
+      setScannedBarcodes(isExistingActiveSession ? existingScannedBarcodes : []);
+      scannedBarcodeSetRef.current = new Set(isExistingActiveSession ? existingScannedBarcodes : []);
+      setStep('waiting');
+    } catch (err) {
+      console.error('join player error:', err);
+      alert(`เข้าร่วมห้องไม่สำเร็จ: ${err?.message || err}`);
+    } finally {
+      setIsJoiningRoom(false);
+    }
   };
 
   const handleManualScanSubmit = async (e) => {
@@ -1783,9 +1892,12 @@ export default function GameMain() {
               <div className="flex justify-center gap-4">
                 <button
                   type="submit"
-                  className="px-12 py-4 rounded-2xl font-black text-[#0a192f] bg-gradient-to-r from-cyan-400 to-blue-500 text-xl uppercase tracking-widest active:scale-95 transition-transform"
+                  disabled={isJoiningRoom}
+                  className={`px-12 py-4 rounded-2xl font-black text-[#0a192f] bg-gradient-to-r from-cyan-400 to-blue-500 text-xl uppercase tracking-widest active:scale-95 transition-transform ${
+                    isJoiningRoom ? 'opacity-60 cursor-not-allowed' : ''
+                  }`}
                 >
-                  ยืนยันตัวตนเข้าร่วม
+                  {isJoiningRoom ? 'กำลังเข้าร่วมห้อง...' : 'ยืนยันตัวตนเข้าร่วม'}
                 </button>
               </div>
             </form>
