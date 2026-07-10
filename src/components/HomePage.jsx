@@ -141,7 +141,7 @@ export default function HomePage() {
             ใบความรู้
           </a>
           <Link to="/admin" className="px-4 py-2 rounded-full bg-fuchsia-500 text-white shadow-lg shadow-fuchsia-200 hover:bg-fuchsia-600">
-            Admin
+            สร้างห้องเล่นเกม
           </Link>
         </nav>
       </header>
@@ -177,7 +177,7 @@ export default function HomePage() {
                 to="/create-room"
                 className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white font-black px-7 py-4 rounded-2xl shadow-xl shadow-fuchsia-200 hover:scale-[1.02] transition"
               >
-                <Users /> สร้างห้องเรียน
+                <Users /> สร้างห้องเล่นเกม
               </Link>
               <a
                 href="#knowledge"
